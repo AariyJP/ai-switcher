@@ -94,6 +94,9 @@ function App() {
     startOAuthLogin,
     completeOAuthLogin,
     cancelOAuthLogin,
+    startClaudeOAuthLogin,
+    completeClaudeOAuthLogin,
+    cancelClaudeOAuthLogin,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
   } = useAccounts(activeTool);
@@ -828,6 +831,9 @@ function App() {
         onStartOAuth={startOAuthLogin}
         onCompleteOAuth={completeOAuthLogin}
         onCancelOAuth={cancelOAuthLogin}
+        onStartClaudeOAuth={startClaudeOAuthLogin}
+        onCompleteClaudeOAuth={completeClaudeOAuthLogin}
+        onCancelClaudeOAuth={cancelClaudeOAuthLogin}
       />
 
       <Dialog

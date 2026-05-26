@@ -28,9 +28,13 @@ interface AddAccountModalProps {
   onStartOAuth: (name: string) => Promise<{ auth_url: string }>;
   onCompleteOAuth: () => Promise<unknown>;
   onCancelOAuth: () => Promise<void>;
+  onStartClaudeOAuth: (name: string) => Promise<{ auth_url: string }>;
+  onCompleteClaudeOAuth: () => Promise<unknown>;
+  onCancelClaudeOAuth: () => Promise<void>;
 }
 
-type Tab = "oauth" | "import";
+type CodexTab = "oauth" | "import";
+type ClaudeTab = "oauth" | "import_current";
 
 export function AddAccountModal({
   isOpen,
@@ -41,8 +45,12 @@ export function AddAccountModal({
   onStartOAuth,
   onCompleteOAuth,
   onCancelOAuth,
+  onStartClaudeOAuth,
+  onCompleteClaudeOAuth,
+  onCancelClaudeOAuth,
 }: AddAccountModalProps) {
-  const [activeTab, setActiveTab] = useState<Tab>("oauth");
+  const [codexTab, setCodexTab] = useState<CodexTab>("oauth");
+  const [claudeTab, setClaudeTab] = useState<ClaudeTab>("oauth");
   const [name, setName] = useState("");
   const [fileSource, setFileSource] = useState<FileSource | null>(null);
   const [loading, setLoading] = useState(false);
@@ -50,8 +58,12 @@ export function AddAccountModal({
   const [oauthPending, setOauthPending] = useState(false);
   const [authUrl, setAuthUrl] = useState<string>("");
   const [copied, setCopied] = useState<boolean>(false);
-  const isPrimaryDisabled = loading || (tool === "codex" && activeTab === "oauth" && oauthPending);
   const tauriRuntime = isTauriRuntime();
+
+  const isCodexOAuthMode = tool === "codex" && codexTab === "oauth";
+  const isClaudeOAuthMode = tool === "claude" && claudeTab === "oauth";
+  const isOAuthMode = isCodexOAuthMode || isClaudeOAuthMode;
+  const isPrimaryDisabled = loading || (isOAuthMode && oauthPending);
 
   const resetForm = () => {
     setName("");
@@ -62,10 +74,21 @@ export function AddAccountModal({
     setAuthUrl("");
   };
 
-  const handleClose = () => {
-    if (oauthPending) {
-      onCancelOAuth();
+  const cancelActiveOAuthIfNeeded = async () => {
+    if (!oauthPending) return;
+    try {
+      if (tool === "claude") {
+        await onCancelClaudeOAuth();
+      } else {
+        await onCancelOAuth();
+      }
+    } catch (err) {
+      console.error("Failed to cancel login:", err);
     }
+  };
+
+  const handleClose = () => {
+    void cancelActiveOAuthIfNeeded();
     resetForm();
     onClose();
   };
@@ -79,12 +102,14 @@ export function AddAccountModal({
     try {
       setLoading(true);
       setError(null);
-      const info = await onStartOAuth(name.trim());
+      const starter = tool === "claude" ? onStartClaudeOAuth : onStartOAuth;
+      const completer = tool === "claude" ? onCompleteClaudeOAuth : onCompleteOAuth;
+      const info = await starter(name.trim());
       setAuthUrl(info.auth_url);
       setOauthPending(true);
       setLoading(false);
 
-      await onCompleteOAuth();
+      await completer();
       handleClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -140,6 +165,83 @@ export function AddAccountModal({
     }
   };
 
+  const renderOAuthTab = () => (
+    <div className="text-muted-foreground text-sm">
+      {oauthPending ? (
+        <div className="py-2 text-center">
+          <Loader2 className="text-foreground mx-auto mb-3 size-8 animate-spin" />
+          <p className="text-foreground mb-2 font-medium">
+            Waiting for browser login...
+          </p>
+          <p className="text-muted-foreground mb-4 text-xs">
+            Please open the following link in your browser to proceed:
+          </p>
+          <div className="bg-muted border-border mb-2 flex items-center gap-2 rounded-lg border p-2">
+            <Input
+              type="text"
+              readOnly
+              value={authUrl}
+              className="border-none bg-transparent text-xs shadow-none focus-visible:ring-0"
+            />
+            <Button
+              size="sm"
+              variant={copied ? "secondary" : "outline"}
+              onClick={() => {
+                void navigator.clipboard
+                  .writeText(authUrl)
+                  .then(() => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  })
+                  .catch(() => {
+                    setError("Clipboard unavailable. Copy the link manually.");
+                  });
+              }}
+            >
+              {copied ? "Copied!" : "Copy"}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                void openExternalUrl(authUrl);
+              }}
+            >
+              <ExternalLink className="size-3" />
+              Open
+            </Button>
+          </div>
+          {!tauriRuntime && (
+            <p className="text-xs text-amber-600">
+              OAuth login must finish on the same host machine because the
+              callback redirects to `localhost`.
+            </p>
+          )}
+        </div>
+      ) : (
+        <p>
+          Click the button below to generate a login link. You will need to open it
+          in your browser to authenticate.
+        </p>
+      )}
+    </div>
+  );
+
+  const primaryAction = isClaudeOAuthMode
+    ? handleOAuthLogin
+    : tool === "claude"
+      ? handleAddClaude
+      : isCodexOAuthMode
+        ? handleOAuthLogin
+        : handleImportFile;
+
+  const primaryLabel = loading
+    ? "Adding..."
+    : isOAuthMode
+      ? "Generate Login Link"
+      : tool === "claude"
+        ? "Import Current Login"
+        : "Import";
+
   return (
     <Dialog
       open={isOpen}
@@ -153,30 +255,60 @@ export function AddAccountModal({
         </DialogHeader>
 
         {tool === "claude" ? (
-          <div className="space-y-4 pt-2">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Account Name</label>
-              <Input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g., Work Account"
-              />
-            </div>
-            <p className="text-muted-foreground text-sm">
-              Import the Claude Code login currently stored on this Mac.
-            </p>
-            {error && (
-              <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
-                {error}
+          <Tabs
+            value={claudeTab}
+            onValueChange={(value) => {
+              const next = value as ClaudeTab;
+              if (next !== "oauth" && oauthPending) {
+                void onCancelClaudeOAuth().catch((err) => {
+                  console.error("Failed to cancel Claude login:", err);
+                });
+                setOauthPending(false);
+                setLoading(false);
+              }
+              setClaudeTab(next);
+              setError(null);
+            }}
+            className="w-full"
+          >
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="oauth">Claude Login</TabsTrigger>
+              <TabsTrigger value="import_current">Import Current Login</TabsTrigger>
+            </TabsList>
+
+            <div className="space-y-4 pt-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Account Name</label>
+                <Input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g., Work Account"
+                />
               </div>
-            )}
-          </div>
+
+              <TabsContent value="oauth" className="m-0">
+                {renderOAuthTab()}
+              </TabsContent>
+
+              <TabsContent value="import_current" className="m-0">
+                <p className="text-muted-foreground text-sm">
+                  Import the Claude Code login currently stored on this Mac (Keychain).
+                </p>
+              </TabsContent>
+
+              {error && (
+                <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
+                  {error}
+                </div>
+              )}
+            </div>
+          </Tabs>
         ) : (
           <Tabs
-            value={activeTab}
+            value={codexTab}
             onValueChange={(value) => {
-              const tab = value as Tab;
+              const tab = value as CodexTab;
               if (tab === "import" && oauthPending) {
                 void onCancelOAuth().catch((err) => {
                   console.error("Failed to cancel login:", err);
@@ -184,7 +316,7 @@ export function AddAccountModal({
                 setOauthPending(false);
                 setLoading(false);
               }
-              setActiveTab(tab);
+              setCodexTab(tab);
               setError(null);
             }}
             className="w-full"
@@ -206,64 +338,7 @@ export function AddAccountModal({
               </div>
 
             <TabsContent value="oauth" className="m-0">
-              <div className="text-muted-foreground text-sm">
-                {oauthPending ? (
-                  <div className="py-2 text-center">
-                    <Loader2 className="text-foreground mx-auto mb-3 size-8 animate-spin" />
-                    <p className="text-foreground mb-2 font-medium">
-                      Waiting for browser login...
-                    </p>
-                    <p className="text-muted-foreground mb-4 text-xs">
-                      Please open the following link in your browser to proceed:
-                    </p>
-                    <div className="bg-muted border-border mb-2 flex items-center gap-2 rounded-lg border p-2">
-                      <Input
-                        type="text"
-                        readOnly
-                        value={authUrl}
-                        className="border-none bg-transparent text-xs shadow-none focus-visible:ring-0"
-                      />
-                      <Button
-                        size="sm"
-                        variant={copied ? "secondary" : "outline"}
-                        onClick={() => {
-                          void navigator.clipboard
-                            .writeText(authUrl)
-                            .then(() => {
-                              setCopied(true);
-                              setTimeout(() => setCopied(false), 2000);
-                            })
-                            .catch(() => {
-                              setError("Clipboard unavailable. Copy the link manually.");
-                            });
-                        }}
-                      >
-                        {copied ? "Copied!" : "Copy"}
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          void openExternalUrl(authUrl);
-                        }}
-                      >
-                        <ExternalLink className="size-3" />
-                        Open
-                      </Button>
-                    </div>
-                    {!tauriRuntime && (
-                      <p className="text-xs text-amber-600">
-                        OAuth login must finish on the same host machine because the
-                        callback redirects to `localhost`.
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <p>
-                    Click the button below to generate a login link. You will need to open it
-                    in your browser to authenticate.
-                  </p>
-                )}
-              </div>
+              {renderOAuthTab()}
             </TabsContent>
 
             <TabsContent value="import" className="m-0">
@@ -297,23 +372,11 @@ export function AddAccountModal({
             Cancel
           </Button>
           <Button
-            onClick={
-              tool === "claude"
-                ? handleAddClaude
-                : activeTab === "oauth"
-                  ? handleOAuthLogin
-                  : handleImportFile
-            }
+            onClick={primaryAction}
             disabled={isPrimaryDisabled}
             className="flex-1"
           >
-            {loading
-              ? "Adding..."
-              : tool === "claude"
-                ? "Import Current Login"
-                : activeTab === "oauth"
-                  ? "Generate Login Link"
-                  : "Import"}
+            {primaryLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -304,12 +304,14 @@ export function useAccounts(tool: ToolKind = "codex") {
         }
 
         await invokeBackend<AccountInfo>("add_claude_account_from_current", { name });
-        await loadAccounts();
+        const accountList = await loadAccounts();
+        fetchedToolsRef.current.add(tool);
+        await refreshUsage(accountList);
       } catch (err) {
         throw err;
       }
     },
-    [loadAccounts, tool]
+    [loadAccounts, refreshUsage, tool]
   );
 
   const startOAuthLogin = useCallback(async (accountName: string) => {
@@ -395,6 +397,37 @@ export function useAccounts(tool: ToolKind = "codex") {
     }
   }, []);
 
+  const startClaudeOAuthLogin = useCallback(async (accountName: string) => {
+    try {
+      const info = await invokeBackend<{ auth_url: string; callback_port: number }>(
+        "start_claude_login",
+        { accountName }
+      );
+      return info;
+    } catch (err) {
+      throw err;
+    }
+  }, []);
+
+  const completeClaudeOAuthLogin = useCallback(async () => {
+    try {
+      const account = await invokeBackend<AccountInfo>("complete_claude_login");
+      const accountList = await loadAccounts();
+      await refreshUsage(accountList);
+      return account;
+    } catch (err) {
+      throw err;
+    }
+  }, [loadAccounts, refreshUsage]);
+
+  const cancelClaudeOAuthLogin = useCallback(async () => {
+    try {
+      await invokeBackend("cancel_claude_login");
+    } catch (err) {
+      console.error("Failed to cancel Claude login:", err);
+    }
+  }, []);
+
   const loadMaskedAccountIds = useCallback(async () => {
     try {
       return await invokeBackend<string[]>("get_masked_account_ids");
@@ -413,6 +446,7 @@ export function useAccounts(tool: ToolKind = "codex") {
   }, []);
 
   useEffect(() => {
+    setAccounts([]);
     loadAccounts().then((accountList) => {
       if (fetchedToolsRef.current.has(tool)) {
         return;
@@ -446,6 +480,9 @@ export function useAccounts(tool: ToolKind = "codex") {
     startOAuthLogin,
     completeOAuthLogin,
     cancelOAuthLogin,
+    startClaudeOAuthLogin,
+    completeClaudeOAuthLogin,
+    cancelClaudeOAuthLogin,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
   };

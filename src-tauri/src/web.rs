@@ -11,12 +11,12 @@ use tokio::runtime::Runtime;
 
 use crate::commands::{
     add_account_from_auth_json_text, add_account_from_file, add_claude_account_from_current,
-    cancel_login, check_processes, complete_login, delete_account,
-    export_accounts_full_encrypted_bytes, export_accounts_slim_text, get_active_account_info,
-    get_masked_account_ids, get_usage, import_accounts_full_encrypted_bytes,
-    import_accounts_slim_text, list_accounts, refresh_account_metadata, refresh_all_accounts_usage,
-    rename_account, set_masked_account_ids, start_login, switch_account, warmup_account,
-    warmup_all_accounts,
+    cancel_claude_login, cancel_login, check_processes, complete_claude_login, complete_login,
+    delete_account, export_accounts_full_encrypted_bytes, export_accounts_slim_text,
+    get_active_account_info, get_masked_account_ids, get_usage,
+    import_accounts_full_encrypted_bytes, import_accounts_slim_text, list_accounts,
+    refresh_account_metadata, refresh_all_accounts_usage, rename_account, set_masked_account_ids,
+    start_claude_login, start_login, switch_account, warmup_account, warmup_all_accounts,
 };
 use crate::types::ToolKind;
 
@@ -191,6 +191,12 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
         }
         "complete_login" => to_json(complete_login().await?),
         "cancel_login" => to_json(cancel_login().await?),
+        "start_claude_login" => {
+            let args: LoginArgs = parse_args(payload)?;
+            to_json(start_claude_login(args.account_name).await?)
+        }
+        "complete_claude_login" => to_json(complete_claude_login().await?),
+        "cancel_claude_login" => to_json(cancel_claude_login().await?),
         "export_accounts_slim_text" => to_json(export_accounts_slim_text().await?),
         "import_accounts_slim_text" => {
             let args: ImportSlimArgs = parse_args(payload)?;
