@@ -161,6 +161,8 @@ pub async fn switch_account(account_id: String) -> Result<(), String> {
         .find(|a| a.id == account_id)
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
+    let tool = account.tool;
+
     match &account.auth_data {
         AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {
             // Write to ~/.codex/auth.json
@@ -179,20 +181,22 @@ pub async fn switch_account(account_id: String) -> Result<(), String> {
 
     // Restart Antigravity background process if it is running
     // This allows it to pick up the new authorization file seamlessly
-    if let Ok(pids) = find_antigravity_processes() {
-        for pid in pids {
-            #[cfg(unix)]
-            {
-                let _ = std::process::Command::new("kill")
-                    .arg("-9")
-                    .arg(pid.to_string())
-                    .output();
-            }
-            #[cfg(windows)]
-            {
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/F", "/PID", &pid.to_string()])
-                    .output();
+    if tool == ToolKind::Codex {
+        if let Ok(pids) = find_antigravity_processes() {
+            for pid in pids {
+                #[cfg(unix)]
+                {
+                    let _ = std::process::Command::new("kill")
+                        .arg("-9")
+                        .arg(pid.to_string())
+                        .output();
+                }
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .output();
+                }
             }
         }
     }
