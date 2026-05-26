@@ -85,11 +85,7 @@ jobs:
         run: |
           node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
           node -e "const fs=require('fs');const p='package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            powershell -Command "(Get-Content src-tauri/Cargo.toml) -replace '^version = \".*\"', ('version = \"' + $env:VERSION + '\"') | Set-Content src-tauri/Cargo.toml"
-          else
-            sed -i.bak -E "s/^version = \".*\"/version = \"${VERSION}\"/" src-tauri/Cargo.toml && rm src-tauri/Cargo.toml.bak
-          fi
+          node -e "const fs=require('fs');const p='src-tauri/Cargo.toml';const t=fs.readFileSync(p,'utf8').replace(/^version = \".*\"/m, 'version = \"'+process.env.VERSION+'\"');fs.writeFileSync(p,t);"
 
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
