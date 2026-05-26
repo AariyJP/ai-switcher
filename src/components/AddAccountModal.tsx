@@ -293,7 +293,7 @@ export function AddAccountModal({
 
               <TabsContent value="import_current" className="m-0">
                 <p className="text-muted-foreground text-sm">
-                  Import the Claude Code login currently stored on this Mac (Keychain).
+                  Import the Claude Code login currently stored on this device.
                 </p>
               </TabsContent>
 
