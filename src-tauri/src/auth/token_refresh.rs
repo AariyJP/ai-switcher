@@ -175,7 +175,7 @@ async fn refresh_claude_tokens_inner(
     account: &StoredAccount,
     force: bool,
 ) -> Result<StoredAccount> {
-    let AuthData::ClaudeCode { credentials } = &account.auth_data else {
+    let AuthData::ClaudeCode { credentials, .. } = &account.auth_data else {
         return Ok(account.clone());
     };
 

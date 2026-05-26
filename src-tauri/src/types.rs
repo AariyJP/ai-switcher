@@ -140,6 +140,7 @@ impl StoredAccount {
         email: Option<String>,
         plan_type: Option<String>,
         credentials: Vec<ClaudeCredential>,
+        oauth_account: Option<serde_json::Value>,
     ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
@@ -149,7 +150,10 @@ impl StoredAccount {
             subscription_expires_at: None,
             tool: ToolKind::Claude,
             auth_mode: AuthMode::ClaudeCode,
-            auth_data: AuthData::ClaudeCode { credentials },
+            auth_data: AuthData::ClaudeCode {
+                credentials,
+                oauth_account,
+            },
             created_at: Utc::now(),
             last_used_at: None,
         }
@@ -196,6 +200,8 @@ pub enum AuthData {
     },
     ClaudeCode {
         credentials: Vec<ClaudeCredential>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth_account: Option<serde_json::Value>,
     },
 }
 

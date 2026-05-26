@@ -292,6 +292,7 @@ pub fn update_account_claude_credentials(
     match &mut account.auth_data {
         AuthData::ClaudeCode {
             credentials: stored_credentials,
+            ..
         } => {
             *stored_credentials = credentials;
         }

@@ -81,26 +81,92 @@ struct TokenResponse {
     scope: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct ProfileResponse {
-    #[serde(default)]
-    account: Option<ProfileAccount>,
-    #[serde(default)]
-    organization: Option<ProfileOrganization>,
+fn profile_account_email(profile: &Value) -> Option<String> {
+    profile
+        .get("account")?
+        .get("email")?
+        .as_str()
+        .map(String::from)
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct ProfileAccount {
-    #[serde(default)]
-    email: Option<String>,
+fn profile_organization_type(profile: &Value) -> Option<String> {
+    profile
+        .get("organization")?
+        .get("organization_type")?
+        .as_str()
+        .map(String::from)
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct ProfileOrganization {
-    #[serde(default)]
-    organization_type: Option<String>,
-    #[serde(default)]
-    rate_limit_tier: Option<String>,
+fn profile_organization_rate_limit_tier(profile: &Value) -> Option<String> {
+    profile
+        .get("organization")?
+        .get("rate_limit_tier")?
+        .as_str()
+        .map(String::from)
+}
+
+fn build_oauth_account_from_profile(profile: &Value) -> Option<Value> {
+    let account = profile.get("account").and_then(Value::as_object);
+    let organization = profile.get("organization").and_then(Value::as_object);
+    if account.is_none() && organization.is_none() {
+        return None;
+    }
+
+    let mut out = serde_json::Map::new();
+    let copy_str = |out: &mut serde_json::Map<String, Value>,
+                    src: Option<&serde_json::Map<String, Value>>,
+                    key: &str,
+                    dest: &str| {
+        if let Some(v) = src.and_then(|s| s.get(key)) {
+            if !v.is_null() {
+                out.insert(dest.to_string(), v.clone());
+            }
+        }
+    };
+
+    copy_str(&mut out, account, "uuid", "accountUuid");
+    copy_str(&mut out, account, "email", "emailAddress");
+    copy_str(&mut out, account, "display_name", "displayName");
+    copy_str(&mut out, account, "created_at", "accountCreatedAt");
+    copy_str(&mut out, organization, "uuid", "organizationUuid");
+    copy_str(&mut out, organization, "billing_type", "billingType");
+    copy_str(
+        &mut out,
+        organization,
+        "subscription_created_at",
+        "subscriptionCreatedAt",
+    );
+    copy_str(
+        &mut out,
+        organization,
+        "has_extra_usage_enabled",
+        "hasExtraUsageEnabled",
+    );
+    copy_str(
+        &mut out,
+        organization,
+        "cc_onboarding_flags",
+        "ccOnboardingFlags",
+    );
+    copy_str(
+        &mut out,
+        organization,
+        "claude_code_trial_ends_at",
+        "claudeCodeTrialEndsAt",
+    );
+    copy_str(
+        &mut out,
+        organization,
+        "claude_code_trial_duration_days",
+        "claudeCodeTrialDurationDays",
+    );
+    copy_str(&mut out, organization, "seat_tier", "seatTier");
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(Value::Object(out))
+    }
 }
 
 async fn exchange_code_for_tokens(
@@ -138,7 +204,7 @@ async fn exchange_code_for_tokens(
         .context("Failed to parse Claude token exchange response")
 }
 
-async fn fetch_profile(access_token: &str) -> Option<ProfileResponse> {
+async fn fetch_profile(access_token: &str) -> Option<Value> {
     let client = reqwest::Client::new();
     let resp = client
         .get(PROFILE_URL)
@@ -153,13 +219,10 @@ async fn fetch_profile(access_token: &str) -> Option<ProfileResponse> {
         return None;
     }
 
-    resp.json::<ProfileResponse>().await.ok()
+    resp.json::<Value>().await.ok()
 }
 
-fn build_credential_value(
-    tokens: &TokenResponse,
-    profile: Option<&ProfileResponse>,
-) -> Result<String> {
+fn build_credential_value(tokens: &TokenResponse, profile: Option<&Value>) -> Result<String> {
     let mut oauth = serde_json::Map::new();
     oauth.insert("accessToken".to_string(), json!(tokens.access_token));
     oauth.insert("refreshToken".to_string(), json!(tokens.refresh_token));
@@ -180,18 +243,10 @@ fn build_credential_value(
     }
 
     if let Some(profile) = profile {
-        if let Some(org_type) = profile
-            .organization
-            .as_ref()
-            .and_then(|o| o.organization_type.as_ref())
-        {
+        if let Some(org_type) = profile_organization_type(profile) {
             oauth.insert("subscriptionType".to_string(), json!(org_type));
         }
-        if let Some(tier) = profile
-            .organization
-            .as_ref()
-            .and_then(|o| o.rate_limit_tier.as_ref())
-        {
+        if let Some(tier) = profile_organization_rate_limit_tier(profile) {
             oauth.insert("rateLimitTier".to_string(), json!(tier));
         }
     }
@@ -397,14 +452,9 @@ async fn handle_oauth_request(
     println!("[ClaudeOAuth] Token exchange successful");
 
     let profile = fetch_profile(&tokens.access_token).await;
-    let email = profile
-        .as_ref()
-        .and_then(|p| p.account.as_ref().and_then(|account| account.email.clone()));
-    let plan_type = profile.as_ref().and_then(|p| {
-        p.organization
-            .as_ref()
-            .and_then(|o| o.organization_type.clone())
-    });
+    let email = profile.as_ref().and_then(profile_account_email);
+    let plan_type = profile.as_ref().and_then(profile_organization_type);
+    let oauth_account = profile.as_ref().and_then(build_oauth_account_from_profile);
 
     let credential_value = match build_credential_value(&tokens, profile.as_ref()) {
         Ok(value) => value,
@@ -428,6 +478,7 @@ async fn handle_oauth_request(
         email,
         plan_type,
         vec![credential],
+        oauth_account,
     );
 
     let success_html = r#"<!DOCTYPE html>

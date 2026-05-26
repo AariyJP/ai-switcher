@@ -439,7 +439,7 @@ fn extract_chatgpt_auth(account: &StoredAccount) -> Result<(&str, Option<&str>)>
 
 fn extract_claude_auth(account: &StoredAccount) -> Result<ClaudeOauthCredentials> {
     match &account.auth_data {
-        AuthData::ClaudeCode { credentials } => {
+        AuthData::ClaudeCode { credentials, .. } => {
             find_claude_oauth_credentials(credentials).context("Claude OAuth credentials not found")
         }
         AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {

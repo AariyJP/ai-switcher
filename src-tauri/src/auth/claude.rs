@@ -26,11 +26,16 @@ pub fn import_current_claude_account(account_name: String) -> Result<StoredAccou
         metadata.email,
         credential_plan.or(metadata.plan_type),
         credentials,
+        read_claude_oauth_account().unwrap_or(None),
     ))
 }
 
 pub fn switch_to_claude_account(account: &StoredAccount) -> Result<()> {
-    let AuthData::ClaudeCode { credentials } = &account.auth_data else {
+    let AuthData::ClaudeCode {
+        credentials,
+        oauth_account,
+    } = &account.auth_data
+    else {
         anyhow::bail!("Account is not a Claude Code account");
     };
 
@@ -38,7 +43,54 @@ pub fn switch_to_claude_account(account: &StoredAccount) -> Result<()> {
         anyhow::bail!("Claude Code account has no stored credentials");
     }
 
-    write_claude_credentials(credentials)
+    write_claude_credentials(credentials)?;
+
+    if let Some(oauth_account) = oauth_account {
+        if let Err(err) = write_claude_oauth_account(oauth_account) {
+            println!("[Claude] Failed to update ~/.claude.json oauthAccount: {err}");
+        }
+    }
+
+    Ok(())
+}
+
+pub fn read_claude_oauth_account() -> Result<Option<Value>> {
+    let home = dirs::home_dir().context("Could not find home directory")?;
+    let path = home.join(".claude.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read Claude config: {}", path.display()))?;
+    let value: Value = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse Claude config: {}", path.display()))?;
+    Ok(value.get("oauthAccount").cloned())
+}
+
+pub fn write_claude_oauth_account(oauth_account: &Value) -> Result<()> {
+    let home = dirs::home_dir().context("Could not find home directory")?;
+    let path = home.join(".claude.json");
+
+    let mut value: Value = if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read Claude config: {}", path.display()))?;
+        serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse Claude config: {}", path.display()))?
+    } else {
+        Value::Object(serde_json::Map::new())
+    };
+
+    let Some(map) = value.as_object_mut() else {
+        anyhow::bail!("~/.claude.json root is not a JSON object");
+    };
+    map.insert("oauthAccount".to_string(), oauth_account.clone());
+
+    let serialized =
+        serde_json::to_string_pretty(&value).context("Failed to serialize Claude config")?;
+    std::fs::write(&path, serialized)
+        .with_context(|| format!("Failed to write Claude config: {}", path.display()))?;
+
+    Ok(())
 }
 
 pub fn read_current_claude_credentials_snapshot() -> Result<Vec<ClaudeCredential>> {
@@ -203,6 +255,7 @@ fn write_keychain_password(credential: &ClaudeCredential) -> Result<()> {
     let output = Command::new("security")
         .arg("add-generic-password")
         .arg("-U")
+        .arg("-A")
         .arg("-s")
         .arg(&credential.service_name)
         .arg("-a")
