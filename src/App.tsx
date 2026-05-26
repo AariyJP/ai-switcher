@@ -530,8 +530,10 @@ function App() {
 
   return (
     <div className="bg-background text-foreground min-h-screen">
-      <header className="bg-background sticky top-0 z-40 border-b">
+      <div className="bg-background sticky top-0 z-50">
         <TitleBar />
+      </div>
+      <header className="bg-background sticky top-14 z-40 border-b">
 
         <div className="mx-auto max-w-5xl px-6 py-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_max-content] md:items-center md:gap-4">
