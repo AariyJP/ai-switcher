@@ -12,7 +12,9 @@ import {
 import "./App.css";
 
 const THEME_STORAGE_KEY = "codex-switcher-theme";
-type ThemeMode = "light" | "dark";
+const ACTIVE_TOOL_STORAGE_KEY = "ac-switcher-active-tool";
+type ThemeMode = "light" | "dark" | "system";
+type ActiveTool = "codex" | "claude";
 const appWindow = getCurrentWindow();
 const isMacOs =
   typeof navigator !== "undefined" &&
@@ -76,15 +78,34 @@ function App() {
   const [isActionsMenuOpen, setIsActionsMenuOpen] = useState(false);
   const actionsMenuRef = useRef<HTMLDivElement | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
-    if (typeof window === "undefined") return "light";
+    if (typeof window === "undefined") return "system";
     try {
       const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
-      return saved === "dark" ? "dark" : "light";
+      if (saved === "dark" || saved === "light" || saved === "system") return saved;
+      return "system";
     } catch {
-      return "light";
+      return "system";
     }
   });
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
+  const [activeTool, setActiveTool] = useState<ActiveTool>(() => {
+    if (typeof window === "undefined") return "codex";
+    try {
+      const saved = window.localStorage.getItem(ACTIVE_TOOL_STORAGE_KEY);
+      if (saved === "codex" || saved === "claude") return saved;
+      return "codex";
+    } catch {
+      return "codex";
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(ACTIVE_TOOL_STORAGE_KEY, activeTool);
+    } catch {
+      // Ignore storage errors; tab still works for current session.
+    }
+  }, [activeTool]);
 
   const handleTitlebarDrag = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -178,13 +199,24 @@ function App() {
   }, [isActionsMenuOpen]);
 
   useEffect(() => {
-    const isDark = themeMode === "dark";
-    document.documentElement.classList.toggle("dark", isDark);
+    const mq =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-color-scheme: dark)")
+        : null;
+    const apply = () => {
+      const isDark =
+        themeMode === "dark" || (themeMode === "system" && !!mq?.matches);
+      document.documentElement.classList.toggle("dark", isDark);
+    };
+    apply();
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
     } catch {
       // Ignore storage errors; theme still works for current session.
     }
+    if (themeMode !== "system" || !mq) return;
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
   }, [themeMode]);
 
   useEffect(() => {
@@ -630,11 +662,21 @@ function App() {
                 <span className={isWarmingAll ? "animate-pulse" : ""}>⚡</span>
               </button>
               <button
-                onClick={() => setThemeMode((prev) => (prev === "dark" ? "light" : "dark"))}
+                onClick={() =>
+                  setThemeMode((prev) =>
+                    prev === "system" ? "light" : prev === "light" ? "dark" : "system"
+                  )
+                }
                 className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-lg text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
-                title={themeMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                title={
+                  themeMode === "system"
+                    ? "Theme: system — click for light"
+                    : themeMode === "light"
+                      ? "Theme: light — click for dark"
+                      : "Theme: dark — click for system"
+                }
               >
-                {themeMode === "dark" ? "☀" : "☾"}
+                {themeMode === "system" ? "🖥" : themeMode === "light" ? "☀" : "☾"}
               </button>
 
               <div className="relative" ref={actionsMenuRef}>
@@ -703,9 +745,64 @@ function App() {
         </div>
       </header>
 
+      <div className="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-black">
+        <div className="max-w-5xl mx-auto px-6">
+          <nav className="flex gap-1" role="tablist" aria-label="Tool selector">
+            {(
+              [
+                { id: "codex" as const, label: "Codex" },
+                { id: "claude" as const, label: "Claude" },
+              ]
+            ).map((tab) => {
+              const isActive = activeTool === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setActiveTool(tab.id)}
+                  className={
+                    "relative px-4 py-3 text-sm font-medium transition-colors " +
+                    (isActive
+                      ? "text-gray-900 dark:text-gray-100"
+                      : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200")
+                  }
+                >
+                  {tab.label}
+                  {isActive && (
+                    <span className="absolute inset-x-0 -bottom-px h-0.5 bg-gray-900 dark:bg-gray-100" />
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+      </div>
+
       {/* Main Content */}
       <main className="max-w-5xl mx-auto px-6 py-8">
-        {loading && accounts.length === 0 ? (
+        {activeTool === "claude" ? (
+          <div className="text-center py-20">
+            <div className="h-16 w-16 rounded-2xl bg-gray-100 dark:bg-gray-800 flex items-center justify-center mx-auto mb-4">
+              <span className="text-3xl">🤖</span>
+            </div>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
+              Claude support is coming
+            </h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Tracking in{" "}
+              <a
+                href="https://github.com/AariyJP/ac-switcher/issues/1"
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-gray-700 dark:hover:text-gray-200"
+              >
+                ac-switcher#1
+              </a>
+              .
+            </p>
+          </div>
+        ) : loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <div className="animate-spin h-10 w-10 border-2 border-gray-900 dark:border-gray-100 border-t-transparent rounded-full mb-4"></div>
             <p className="text-gray-500 dark:text-gray-400">Loading accounts...</p>

@@ -9,3 +9,12 @@
 :root.dark {
   color-scheme: dark;
 }
+
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}
