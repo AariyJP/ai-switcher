@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { isTauriRuntime } from "../lib/platform";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 
 type UpdateStatus =
   | { kind: "idle" }
@@ -81,13 +84,8 @@ export function UpdateChecker() {
     }
   };
 
-  if (!isTauriRuntime()) {
-    return null;
-  }
-
-  if (status.kind === "idle" || status.kind === "checking" || dismissed) {
-    return null;
-  }
+  if (!isTauriRuntime()) return null;
+  if (status.kind === "idle" || status.kind === "checking" || dismissed) return null;
 
   const formatBytes = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -96,96 +94,76 @@ export function UpdateChecker() {
   };
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-md w-full px-4">
-      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl p-4">
+    <div className="fixed bottom-6 left-1/2 z-50 w-full max-w-md -translate-x-1/2 px-4">
+      <Card className="p-4 shadow-xl">
         {status.kind === "available" && (
           <div className="flex items-start gap-3">
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            <div className="min-w-0 flex-1">
+              <p className="text-foreground text-sm font-medium">
                 Update available: v{status.update.version}
               </p>
               {status.update.body && (
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+                <p className="text-muted-foreground mt-0.5 truncate text-xs">
                   {status.update.body}
                 </p>
               )}
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => setDismissed(true)}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
-              >
+            <div className="flex shrink-0 items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDismissed(true)}>
                 Later
-              </button>
-              <button
-                onClick={handleDownloadAndInstall}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors"
-              >
+              </Button>
+              <Button size="sm" onClick={handleDownloadAndInstall}>
                 Update
-              </button>
+              </Button>
             </div>
           </div>
         )}
 
         {status.kind === "downloading" && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Downloading update...</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-foreground text-sm font-medium">Downloading update...</p>
+              <p className="text-muted-foreground text-xs">
                 {formatBytes(status.downloaded)}
                 {status.total ? ` / ${formatBytes(status.total)}` : ""}
               </p>
             </div>
-            <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5">
-              <div
-                className="bg-gray-900 dark:bg-gray-100 h-1.5 rounded-full transition-all duration-300"
-                style={{
-                  width:
-                    status.total && status.total > 0
-                      ? `${Math.min(100, (status.downloaded / status.total) * 100)}%`
-                      : "50%",
-                }}
-              />
-            </div>
+            <Progress
+              value={
+                status.total && status.total > 0
+                  ? Math.min(100, (status.downloaded / status.total) * 100)
+                  : 50
+              }
+              className="h-1.5"
+            />
           </div>
         )}
 
         {status.kind === "ready" && (
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-foreground text-sm font-medium">
               Update ready. Restart to apply.
             </p>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => setDismissed(true)}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
-              >
+            <div className="flex shrink-0 items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDismissed(true)}>
                 Later
-              </button>
-              <button
-                onClick={handleRelaunch}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors"
-              >
+              </Button>
+              <Button size="sm" onClick={handleRelaunch}>
                 Restart
-              </button>
+              </Button>
             </div>
           </div>
         )}
 
         {status.kind === "error" && (
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-red-600 dark:text-red-300">
-              Update failed: {status.message}
-            </p>
-            <button
-              onClick={() => setDismissed(true)}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors shrink-0 ml-2"
-            >
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-destructive text-sm">Update failed: {status.message}</p>
+            <Button variant="outline" size="sm" onClick={() => setDismissed(true)}>
               Dismiss
-            </button>
+            </Button>
           </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

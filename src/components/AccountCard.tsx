@@ -1,5 +1,12 @@
 import { useState, useRef, useEffect } from "react";
+import { Check, Eye, EyeOff, RefreshCw, Trash2, Zap } from "lucide-react";
 import type { AccountWithUsage } from "../types";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { UsageBar } from "./UsageBar";
 
 interface AccountCardProps {
@@ -34,7 +41,7 @@ function getSubscriptionStatus(timestamp: string | null | undefined): {
   if (!timestamp) {
     return {
       label: "Expiry unavailable",
-      className: "text-gray-400 dark:text-gray-500",
+      className: "text-muted-foreground",
     };
   }
 
@@ -52,37 +59,64 @@ function getSubscriptionStatus(timestamp: string | null | undefined): {
       className: "text-red-500 dark:text-red-400",
     };
   }
-
   if (remainingMs <= 3 * 24 * 60 * 60 * 1000) {
     return {
       label: `Until ${formattedDate}`,
       className: "text-red-500 dark:text-red-400",
     };
   }
-
   if (remainingMs <= 7 * 24 * 60 * 60 * 1000) {
     return {
       label: `Until ${formattedDate}`,
       className: "text-amber-500 dark:text-amber-400",
     };
   }
-
   return {
     label: `Until ${formattedDate}`,
-    className: "text-gray-400 dark:text-gray-500",
+    className: "text-muted-foreground",
   };
 }
 
 function BlurredText({ children, blur }: { children: React.ReactNode; blur: boolean }) {
   return (
     <span
-      className={`transition-all duration-200 select-none ${blur ? "blur-sm" : ""}`}
+      className={cn("select-none transition-all duration-200", blur && "blur-sm")}
       style={blur ? { userSelect: "none" } : undefined}
     >
       {children}
     </span>
   );
 }
+
+const planVariantMap: Record<
+  string,
+  { className: string }
+> = {
+  pro: {
+    className:
+      "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
+  },
+  plus: {
+    className:
+      "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
+  },
+  team: {
+    className:
+      "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+  },
+  enterprise: {
+    className:
+      "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  },
+  free: {
+    className:
+      "border-border bg-muted text-muted-foreground",
+  },
+  api_key: {
+    className:
+      "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-900/30 dark:text-orange-300",
+  },
+};
 
 export function AccountCard({
   account,
@@ -151,52 +185,42 @@ export function AccountCard({
       ? "API Key"
       : "Unknown";
 
-  const planColors: Record<string, string> = {
-    pro: "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-700",
-    plus: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700",
-    team: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700",
-    enterprise: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700",
-    free: "bg-gray-50 text-gray-600 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700",
-    api_key: "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700",
-  };
-
   const planKey = account.plan_type?.toLowerCase() || "api_key";
-  const planColorClass = planColors[planKey] || planColors.free;
+  const planVariant = planVariantMap[planKey] ?? planVariantMap.free;
   const showSubscriptionStatus = account.auth_mode === "chat_g_p_t";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
 
-
   return (
-    <div
-      className={`relative rounded-xl border p-5 transition-all duration-200 ${
+    <Card
+      className={cn(
+        "relative gap-0 p-5 transition-all duration-200",
         account.is_active
-          ? "bg-white dark:bg-gray-900 border-emerald-400 shadow-sm"
-          : "bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
-      }`}
+          ? "border-emerald-400 shadow-sm"
+          : "hover:border-foreground/20"
+      )}
     >
-      {/* Header */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+      <div className="mb-3 flex items-start justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex items-center gap-2">
             {account.is_active && (
-              <span className="flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-green-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+              <span className="relative flex h-2 w-2">
+                <span className="bg-emerald-400/75 absolute inline-flex h-2 w-2 animate-ping rounded-full" />
+                <span className="bg-emerald-500 relative inline-flex h-2 w-2 rounded-full" />
               </span>
             )}
             {isEditing ? (
-              <input
+              <Input
                 ref={inputRef}
                 type="text"
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 onBlur={handleRename}
                 onKeyDown={handleKeyDown}
-                className="font-semibold text-gray-900 dark:text-gray-100 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 focus:outline-none focus:border-gray-500 dark:focus:border-gray-500 w-full"
+                className="h-7 px-2 py-0.5 text-base font-semibold"
               />
             ) : (
               <h3
-                className="font-semibold text-gray-900 dark:text-gray-100 truncate cursor-pointer hover:text-gray-600 dark:hover:text-gray-300"
+                className="text-foreground hover:text-muted-foreground cursor-pointer truncate font-semibold"
                 onClick={() => {
                   if (masked) return;
                   setEditName(account.name);
@@ -209,115 +233,118 @@ export function AccountCard({
             )}
           </div>
           {account.email && (
-            <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
+            <p className="text-muted-foreground truncate text-sm">
               <BlurredText blur={masked}>{account.email}</BlurredText>
             </p>
           )}
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Eye toggle */}
           {onToggleMask && (
-            <button
-              onClick={onToggleMask}
-              className="p-1 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              title={masked ? "Show info" : "Hide info"}
-            >
-              {masked ? (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                </svg>
-              ) : (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                </svg>
-              )}
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onToggleMask}
+                  className="text-muted-foreground hover:text-foreground h-7 w-7"
+                >
+                  {masked ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{masked ? "Show info" : "Hide info"}</TooltipContent>
+            </Tooltip>
           )}
-          {/* Plan badge */}
-          <span
-            className={`px-2.5 py-1 text-xs font-medium rounded-full border ${planColorClass}`}
-          >
+          <Badge variant="outline" className={cn("rounded-full px-2.5 py-1", planVariant.className)}>
             {planDisplay}
-          </span>
+          </Badge>
         </div>
       </div>
 
-      {/* Usage */}
       <div className="mb-3">
         <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
       </div>
 
-      {/* Last refresh time */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-3">
-        <div className="text-gray-400 dark:text-gray-500">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="text-muted-foreground">
           Last updated: {formatLastRefresh(lastRefresh)}
         </div>
         {showSubscriptionStatus && (
-          <div className={`text-right ${subscriptionStatus.className}`}>
+          <div className={cn("text-right", subscriptionStatus.className)}>
             {subscriptionStatus.label}
           </div>
         )}
       </div>
 
-      {/* Actions */}
       <div className="flex gap-2">
         {account.is_active ? (
-          <button
-            disabled
-            className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 cursor-default"
-          >
-            ✓ Active
-          </button>
+          <Button disabled variant="secondary" className="flex-1">
+            <Check className="size-4" /> Active
+          </Button>
         ) : (
-          <button
-            onClick={onSwitch}
-            disabled={switching || switchDisabled}
-            className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
-              switchDisabled
-                ? "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-500 cursor-not-allowed"
-                : "bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900"
-            }`}
-            title={switchDisabled ? "Close all Codex processes first" : undefined}
-          >
-            {switching ? "Switching..." : switchDisabled ? "Codex Running" : "Switch"}
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onClick={onSwitch}
+                disabled={switching || switchDisabled}
+                className="flex-1"
+              >
+                {switching ? "Switching..." : switchDisabled ? "Codex Running" : "Switch"}
+              </Button>
+            </TooltipTrigger>
+            {switchDisabled && (
+              <TooltipContent>Close all Codex processes first</TooltipContent>
+            )}
+          </Tooltip>
         )}
-        <button
-          onClick={() => {
-            void onWarmup();
-          }}
-          disabled={warmingUp}
-          className={`px-3 py-2 text-sm rounded-lg transition-colors ${
-            warmingUp
-              ? "bg-amber-100 dark:bg-amber-900/30 text-amber-500 dark:text-amber-300"
-              : "bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-300"
-          }`}
-          title={warmingUp ? "Sending warm-up request..." : "Send minimal warm-up request"}
-        >
-          ⚡
-        </button>
-        <button
-          onClick={handleRefresh}
-          disabled={isRefreshing}
-          className={`px-3 py-2 text-sm rounded-lg transition-colors ${
-            isRefreshing
-              ? "bg-gray-200 dark:bg-gray-800 text-gray-400 dark:text-gray-500"
-              : "bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
-          }`}
-          title="Refresh usage"
-        >
-          <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
-        </button>
-        <button
-          onClick={onDelete}
-          className="px-3 py-2 text-sm rounded-lg bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-300 transition-colors"
-          title="Remove account"
-        >
-          ✕
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => {
+                void onWarmup();
+              }}
+              disabled={warmingUp}
+              className={cn(
+                "border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/30",
+                warmingUp && "animate-pulse"
+              )}
+            >
+              <Zap className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {warmingUp ? "Sending warm-up request..." : "Send minimal warm-up request"}
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+            >
+              <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Refresh usage</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={onDelete}
+              className="border-red-200 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30"
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Remove account</TooltipContent>
+        </Tooltip>
       </div>
-    </div>
+    </Card>
   );
 }

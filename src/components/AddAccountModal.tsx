@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ExternalLink, Loader2 } from "lucide-react";
 import {
   describeFileSource,
   isTauriRuntime,
@@ -6,6 +7,16 @@ import {
   pickAuthJsonFile,
   type FileSource,
 } from "../lib/platform";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface AddAccountModalProps {
   isOpen: boolean;
@@ -68,7 +79,6 @@ export function AddAccountModal({
       setOauthPending(true);
       setLoading(false);
 
-      // Wait for completion
       await onCompleteOAuth();
       handleClose();
     } catch (err) {
@@ -108,177 +118,153 @@ export function AddAccountModal({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl w-full max-w-md mx-4 shadow-xl">
-        {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-800">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Add Account</h2>
-          <button
-            onClick={handleClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-          >
-            ✕
-          </button>
-        </div>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) handleClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Account</DialogTitle>
+        </DialogHeader>
 
-        {/* Tabs */}
-        <div className="flex border-b border-gray-100 dark:border-gray-800">
-          {(["oauth", "import"] as Tab[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => {
-                if (tab === "import" && oauthPending) {
-                  void onCancelOAuth().catch((err) => {
-                    console.error("Failed to cancel login:", err);
-                  });
-                  setOauthPending(false);
-                  setLoading(false);
-                }
-                setActiveTab(tab);
-                setError(null);
-              }}
-              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === tab
-                  ? "text-gray-900 dark:text-gray-100 border-b-2 border-gray-900 dark:border-gray-100 -mb-px"
-                  : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
-                }`}
-            >
-              {tab === "oauth" ? "ChatGPT Login" : "Import File"}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            const tab = value as Tab;
+            if (tab === "import" && oauthPending) {
+              void onCancelOAuth().catch((err) => {
+                console.error("Failed to cancel login:", err);
+              });
+              setOauthPending(false);
+              setLoading(false);
+            }
+            setActiveTab(tab);
+            setError(null);
+          }}
+          className="w-full"
+        >
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="oauth">ChatGPT Login</TabsTrigger>
+            <TabsTrigger value="import">Import File</TabsTrigger>
+          </TabsList>
 
-        {/* Content */}
-        <div className="p-5 space-y-4">
-          {/* Account Name (always shown) */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Account Name
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., Work Account"
-              className="w-full px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:border-gray-400 dark:focus:border-gray-500 focus:ring-1 focus:ring-gray-400 dark:focus:ring-gray-500 transition-colors"
-            />
-          </div>
+          <div className="space-y-4 pt-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Account Name</label>
+              <Input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g., Work Account"
+              />
+            </div>
 
-          {/* Tab-specific content */}
-          {activeTab === "oauth" && (
-            <div className="text-sm text-gray-500 dark:text-gray-400">
-              {oauthPending ? (
-                <div className="text-center py-4">
-                  <div className="animate-spin h-8 w-8 border-2 border-gray-900 dark:border-gray-100 border-t-transparent rounded-full mx-auto mb-3"></div>
-                  <p className="text-gray-700 dark:text-gray-300 font-medium mb-2">Waiting for browser login...</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-                    Please open the following link in your browser to proceed:
-                  </p>
-                  <div className="flex items-center gap-2 mb-2 bg-gray-50 dark:bg-gray-800 p-2 rounded-lg border border-gray-200 dark:border-gray-700">
-                    <input
-                      type="text"
-                      readOnly
-                      value={authUrl}
-                      className="flex-1 bg-transparent border-none text-xs text-gray-600 dark:text-gray-300 focus:outline-none focus:ring-0 truncate"
-                    />
-                    <button
-                      onClick={() => {
-                        void navigator.clipboard
-                          .writeText(authUrl)
-                          .then(() => {
-                            setCopied(true);
-                            setTimeout(() => setCopied(false), 2000);
-                          })
-                          .catch(() => {
-                            setError("Clipboard unavailable. Copy the link manually.");
-                          });
-                      }}
-                      className={`px-3 py-1.5 border rounded text-xs font-medium transition-colors shrink-0 
-                        ${copied
-                          ? "bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-700 text-green-700 dark:text-green-300"
-                          : "bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
-                        }`}
-                    >
-                      {copied ? "Copied!" : "Copy"}
-                    </button>
-                    <button
-                      onClick={() => {
-                        void openExternalUrl(authUrl);
-                      }}
-                      className="px-3 py-1.5 bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 border border-gray-900 dark:border-gray-100 rounded text-xs font-medium text-white dark:text-gray-900 transition-colors shrink-0"
-                    >
-                      Open
-                    </button>
-                  </div>
-                  {!tauriRuntime && (
-                    <p className="text-xs text-amber-600">
-                      OAuth login must finish on the same host machine because the callback
-                      redirects to `localhost`.
+            <TabsContent value="oauth" className="m-0">
+              <div className="text-muted-foreground text-sm">
+                {oauthPending ? (
+                  <div className="py-2 text-center">
+                    <Loader2 className="text-foreground mx-auto mb-3 size-8 animate-spin" />
+                    <p className="text-foreground mb-2 font-medium">
+                      Waiting for browser login...
                     </p>
-                  )}
-                </div>
-              ) : (
-                <p>
-                  Click the button below to generate a login link.
-                  You will need to open it in your browser to authenticate.
-                </p>
-              )}
-            </div>
-          )}
-
-          {activeTab === "import" && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Select auth.json file
-              </label>
-              <div className="flex gap-2">
-                <div className="flex-1 px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-600 dark:text-gray-300 truncate">
-                  {describeFileSource(fileSource)}
-                </div>
-                <button
-                  onClick={handleSelectFile}
-                  className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 transition-colors whitespace-nowrap"
-                >
-                  Browse...
-                </button>
+                    <p className="text-muted-foreground mb-4 text-xs">
+                      Please open the following link in your browser to proceed:
+                    </p>
+                    <div className="bg-muted border-border mb-2 flex items-center gap-2 rounded-lg border p-2">
+                      <Input
+                        type="text"
+                        readOnly
+                        value={authUrl}
+                        className="border-none bg-transparent text-xs shadow-none focus-visible:ring-0"
+                      />
+                      <Button
+                        size="sm"
+                        variant={copied ? "secondary" : "outline"}
+                        onClick={() => {
+                          void navigator.clipboard
+                            .writeText(authUrl)
+                            .then(() => {
+                              setCopied(true);
+                              setTimeout(() => setCopied(false), 2000);
+                            })
+                            .catch(() => {
+                              setError("Clipboard unavailable. Copy the link manually.");
+                            });
+                        }}
+                      >
+                        {copied ? "Copied!" : "Copy"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          void openExternalUrl(authUrl);
+                        }}
+                      >
+                        <ExternalLink className="size-3" />
+                        Open
+                      </Button>
+                    </div>
+                    {!tauriRuntime && (
+                      <p className="text-xs text-amber-600">
+                        OAuth login must finish on the same host machine because the
+                        callback redirects to `localhost`.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p>
+                    Click the button below to generate a login link. You will need to open it
+                    in your browser to authenticate.
+                  </p>
+                )}
               </div>
-              <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-                Import credentials from an existing Codex auth.json file
-              </p>
-            </div>
-          )}
+            </TabsContent>
 
-          {/* Error */}
-          {error && (
-            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg text-red-600 dark:text-red-300 text-sm">
-              {error}
-            </div>
-          )}
-        </div>
+            <TabsContent value="import" className="m-0">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Select auth.json file</label>
+                <div className="flex gap-2">
+                  <div className="bg-muted border-input text-muted-foreground flex-1 truncate rounded-md border px-3 py-2 text-sm">
+                    {describeFileSource(fileSource)}
+                  </div>
+                  <Button variant="outline" onClick={handleSelectFile}>
+                    Browse...
+                  </Button>
+                </div>
+                <p className="text-muted-foreground text-xs">
+                  Import credentials from an existing Codex auth.json file
+                </p>
+              </div>
+            </TabsContent>
 
-        {/* Footer */}
-        <div className="flex gap-3 p-5 border-t border-gray-100 dark:border-gray-800">
-          <button
-            onClick={handleClose}
-            className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 transition-colors"
-          >
+            {error && (
+              <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
+                {error}
+              </div>
+            )}
+          </div>
+        </Tabs>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={handleClose} className="flex-1">
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={activeTab === "oauth" ? handleOAuthLogin : handleImportFile}
             disabled={isPrimaryDisabled}
-            className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors disabled:opacity-50"
+            className="flex-1"
           >
             {loading
               ? "Adding..."
               : activeTab === "oauth"
                 ? "Generate Login Link"
                 : "Import"}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
