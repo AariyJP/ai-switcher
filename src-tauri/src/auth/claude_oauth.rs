@@ -269,10 +269,19 @@ fn build_credential_value(tokens: &TokenResponse, profile: Option<&Value>) -> Re
 }
 
 fn current_user_account_name() -> String {
-    std::env::var("USER")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "default".to_string())
+    let candidates = if cfg!(windows) {
+        ["USERNAME", "USER"]
+    } else {
+        ["USER", "USERNAME"]
+    };
+    for name in candidates {
+        if let Ok(value) = std::env::var(name) {
+            if !value.is_empty() {
+                return value;
+            }
+        }
+    }
+    "default".to_string()
 }
 
 pub struct ClaudeOAuthLoginResult {
