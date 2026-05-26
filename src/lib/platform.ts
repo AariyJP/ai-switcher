@@ -88,7 +88,9 @@ export async function importFullBackupFile(): Promise<ImportAccountsSummary | nu
     const selected = await open({
       multiple: false,
       title: "Import Full Encrypted Account Config",
-      filters: [{ name: "AI Switcher Full Backup", extensions: ["aisw"] }],
+      filters: [
+        { name: "AI Switcher Full Backup", extensions: ["aisw", "cswf"] },
+      ],
     });
 
     if (!selected || Array.isArray(selected)) return null;
@@ -97,7 +99,7 @@ export async function importFullBackupFile(): Promise<ImportAccountsSummary | nu
     });
   }
 
-  const selected = await pickBrowserFile(".aisw,application/octet-stream");
+  const selected = await pickBrowserFile(".aisw,.cswf,application/octet-stream");
   if (!selected) return null;
 
   const contentsBase64 = await fileToBase64(selected);
