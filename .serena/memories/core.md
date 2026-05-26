@@ -1,6 +1,6 @@
 # ai-switcher — Project Core
 
-Tauri 2 desktop app for managing multiple AI CLI accounts. Officially renamed to **AI Switcher** (crate `ai-switcher`, identifier `net.aariy.ai-switcher`). Originally Codex CLI–focused; now also supports Claude Code account switching. Local checkout dir may still be `ac-switcher`.
+Tauri 2 desktop app for managing multiple AI CLI accounts. Officially renamed to **AI Switcher** (crate `ai-switcher`, identifier `ai-switcher.ai-switcher`). Originally Codex CLI–focused; now also supports Claude Code account switching. Local checkout dir may still be `ac-switcher`.
 
 ## Layout
 
@@ -16,7 +16,7 @@ Tauri 2 desktop app for managing multiple AI CLI accounts. Officially renamed to
 
 ## Invariants
 
-- App-name strings are unified as `ai-switcher` / `AI Switcher` / `net.aariy.ai-switcher` across `Cargo.toml`, `package.json`, `tauri*.conf.json`, scripts. Don't rename casually — release tooling and bundle paths depend on these.
+- App-name strings are unified as `ai-switcher` / `AI Switcher` / `ai-switcher.ai-switcher` across `Cargo.toml`, `package.json`, `tauri*.conf.json`, scripts. Don't rename casually — release tooling and bundle paths depend on these.
 - Version is kept in sync across Tauri, Cargo, frontend via `pnpm version:bump` (see `mem:suggested_commands`).
 - Frontend talks to backend via Tauri `invoke`; the web/LAN mode (`ai-web`) re-exposes the same handlers at `/api/invoke/*`.
 

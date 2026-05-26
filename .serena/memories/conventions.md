@@ -22,4 +22,4 @@
 - `ai-web` (bin) re-uses the same command functions and exposes them at `/api/invoke/<cmd>` — keep new commands callable from both.
 
 ## App-identity strings
-- Crate name is `ai-switcher`, lib is `ai_switcher_lib`, bundle identifier is `net.aariy.ai-switcher`, product name is "AI Switcher". Changes to these must stay in sync across `Cargo.toml`, `package.json`, `tauri*.conf.json`, `scripts/release.mjs`, and `scripts/bump-version.mjs`.
+- Crate name is `ai-switcher`, lib is `ai_switcher_lib`, bundle identifier is `ai-switcher.ai-switcher`, product name is "AI Switcher". Changes to these must stay in sync across `Cargo.toml`, `package.json`, `tauri*.conf.json`, `scripts/release.mjs`, and `scripts/bump-version.mjs`.
