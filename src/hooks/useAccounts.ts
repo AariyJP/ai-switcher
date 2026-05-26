@@ -20,6 +20,9 @@ export function useAccounts(tool: ToolKind = "codex") {
     accountsRef.current = accounts;
   }, [accounts]);
 
+  const fetchedToolsRef = useRef<Set<ToolKind>>(new Set());
+  const usageCacheRef = useRef<Map<string, UsageInfo>>(new Map());
+
   const buildUsageError = useCallback(
     (accountId: string, message: string, planType: string | null): UsageInfo => ({
       account_id: accountId,
@@ -64,22 +67,21 @@ export function useAccounts(tool: ToolKind = "codex") {
       setLoading(true);
       setError(null);
       const accountList = await invokeBackend<AccountInfo[]>("list_accounts", { tool });
-      
-      if (preserveUsage) {
-        // Preserve existing usage data when just updating account info
-        setAccounts((prev) => {
-          const usageMap = new Map(
-            prev.map((a) => [a.id, { usage: a.usage, usageLoading: a.usageLoading }])
-          );
-          return accountList.map((a) => ({
+
+      setAccounts((prev) => {
+        const prevMap = preserveUsage
+          ? new Map(prev.map((a) => [a.id, { usage: a.usage, usageLoading: a.usageLoading }]))
+          : null;
+        return accountList.map((a) => {
+          const fromPrev = prevMap?.get(a.id);
+          const cached = usageCacheRef.current.get(a.id);
+          return {
             ...a,
-            usage: usageMap.get(a.id)?.usage,
-            usageLoading: usageMap.get(a.id)?.usageLoading,
-          }));
+            usage: fromPrev?.usage ?? cached,
+            usageLoading: fromPrev?.usageLoading ?? false,
+          };
         });
-      } else {
-        setAccounts(accountList.map((a) => ({ ...a, usageLoading: false })));
-      }
+      });
       return accountList;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -134,13 +136,13 @@ export function useAccounts(tool: ToolKind = "codex") {
                 accountId: account.id,
               });
               usageResults.set(account.id, usage);
+              usageCacheRef.current.set(account.id, usage);
             } catch (err) {
               console.error("Failed to refresh usage:", err);
               const message = err instanceof Error ? err.message : String(err);
-              usageResults.set(
-                account.id,
-                buildUsageError(account.id, message, account.plan_type ?? null)
-              );
+              const errInfo = buildUsageError(account.id, message, account.plan_type ?? null);
+              usageResults.set(account.id, errInfo);
+              usageCacheRef.current.set(account.id, errInfo);
             }
           },
           maxConcurrentUsageRequests
@@ -181,6 +183,7 @@ export function useAccounts(tool: ToolKind = "codex") {
         )
       );
       const usage = await invokeBackend<UsageInfo>("get_usage", { accountId });
+      usageCacheRef.current.set(accountId, usage);
       setAccounts((prev) =>
         prev.map((a) =>
           a.id === accountId ? { ...a, usage, usageLoading: false } : a
@@ -189,14 +192,13 @@ export function useAccounts(tool: ToolKind = "codex") {
     } catch (err) {
       console.error("Failed to refresh single usage:", err);
       const message = err instanceof Error ? err.message : String(err);
+      const account = accountsRef.current.find((a) => a.id === accountId);
+      const errInfo = buildUsageError(accountId, message, account?.plan_type ?? null);
+      usageCacheRef.current.set(accountId, errInfo);
       setAccounts((prev) =>
         prev.map((a) =>
           a.id === accountId
-            ? {
-                ...a,
-                usage: buildUsageError(accountId, message, a.plan_type ?? null),
-                usageLoading: false,
-              }
+            ? { ...a, usage: errInfo, usageLoading: false }
             : a
         )
       );
@@ -248,6 +250,7 @@ export function useAccounts(tool: ToolKind = "codex") {
     async (accountId: string) => {
       try {
         await invokeBackend("delete_account", { accountId });
+        usageCacheRef.current.delete(accountId);
         await loadAccounts();
       } catch (err) {
         throw err;
@@ -411,15 +414,15 @@ export function useAccounts(tool: ToolKind = "codex") {
 
   useEffect(() => {
     loadAccounts().then((accountList) => {
+      if (fetchedToolsRef.current.has(tool)) {
+        return;
+      }
+      if (accountList.length === 0) {
+        return;
+      }
+      fetchedToolsRef.current.add(tool);
       refreshUsage(accountList);
     });
-
-    // Auto-refresh usage every 60 seconds (same as official Codex CLI)
-    const interval = setInterval(() => {
-      refreshUsage().catch(() => {});
-    }, 60000);
-    
-    return () => clearInterval(interval);
   }, [loadAccounts, refreshUsage, tool]);
 
   return {
