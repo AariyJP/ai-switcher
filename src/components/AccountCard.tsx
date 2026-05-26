@@ -20,6 +20,10 @@ interface AccountCardProps {
   switchDisabled?: boolean;
   warmingUp?: boolean;
   masked?: boolean;
+  usageEnabled?: boolean;
+  warmupEnabled?: boolean;
+  switchDisabledLabel?: string;
+  switchDisabledTooltip?: string;
   onToggleMask?: () => void;
 }
 
@@ -129,6 +133,10 @@ export function AccountCard({
   switchDisabled,
   warmingUp,
   masked = false,
+  usageEnabled = true,
+  warmupEnabled = true,
+  switchDisabledLabel = "Codex Running",
+  switchDisabledTooltip = "Close all Codex processes first",
   onToggleMask,
 }: AccountCardProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -187,7 +195,7 @@ export function AccountCard({
 
   const planKey = account.plan_type?.toLowerCase() || "api_key";
   const planVariant = planVariantMap[planKey] ?? planVariantMap.free;
-  const showSubscriptionStatus = account.auth_mode === "chat_g_p_t";
+  const showSubscriptionStatus = usageEnabled && account.auth_mode === "chat_g_p_t";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
 
   return (
@@ -261,20 +269,24 @@ export function AccountCard({
         </div>
       </div>
 
-      <div className="mb-3">
-        <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
-      </div>
-
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="text-muted-foreground">
-          Last updated: {formatLastRefresh(lastRefresh)}
+      {usageEnabled && (
+        <div className="mb-3">
+          <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
         </div>
-        {showSubscriptionStatus && (
-          <div className={cn("text-right", subscriptionStatus.className)}>
-            {subscriptionStatus.label}
+      )}
+
+      {usageEnabled && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="text-muted-foreground">
+            Last updated: {formatLastRefresh(lastRefresh)}
           </div>
-        )}
-      </div>
+          {showSubscriptionStatus && (
+            <div className={cn("text-right", subscriptionStatus.className)}>
+              {subscriptionStatus.label}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex gap-2">
         {account.is_active ? (
@@ -289,48 +301,52 @@ export function AccountCard({
                 disabled={switching || switchDisabled}
                 className="flex-1"
               >
-                {switching ? "Switching..." : switchDisabled ? "Codex Running" : "Switch"}
+                {switching ? "Switching..." : switchDisabled ? switchDisabledLabel : "Switch"}
               </Button>
             </TooltipTrigger>
             {switchDisabled && (
-              <TooltipContent>Close all Codex processes first</TooltipContent>
+              <TooltipContent>{switchDisabledTooltip}</TooltipContent>
             )}
           </Tooltip>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => {
-                void onWarmup();
-              }}
-              disabled={warmingUp}
-              className={cn(
-                "border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/30",
-                warmingUp && "animate-pulse"
-              )}
-            >
-              <Zap className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            {warmingUp ? "Sending warm-up request..." : "Send minimal warm-up request"}
-          </TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-            >
-              <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Refresh usage</TooltipContent>
-        </Tooltip>
+        {usageEnabled && warmupEnabled && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => {
+                  void onWarmup();
+                }}
+                disabled={warmingUp}
+                className={cn(
+                  "border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/30",
+                  warmingUp && "animate-pulse"
+                )}
+              >
+                <Zap className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {warmingUp ? "Sending warm-up request..." : "Send minimal warm-up request"}
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {usageEnabled && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+              >
+                <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Refresh usage</TooltipContent>
+          </Tooltip>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

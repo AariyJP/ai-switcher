@@ -10,13 +10,15 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use tokio::runtime::Runtime;
 
 use crate::commands::{
-    add_account_from_auth_json_text, add_account_from_file, cancel_login, check_codex_processes,
-    complete_login, delete_account, export_accounts_full_encrypted_bytes,
-    export_accounts_slim_text, get_active_account_info, get_masked_account_ids, get_usage,
+    add_account_from_auth_json_text, add_account_from_file, add_claude_account_from_current,
+    cancel_claude_login, cancel_login, check_processes, complete_claude_login, complete_login,
+    delete_account, export_accounts_full_encrypted_bytes, export_accounts_slim_text,
+    get_active_account_info, get_masked_account_ids, get_usage,
     import_accounts_full_encrypted_bytes, import_accounts_slim_text, list_accounts,
     refresh_account_metadata, refresh_all_accounts_usage, rename_account, set_masked_account_ids,
-    start_login, switch_account, warmup_account, warmup_all_accounts,
+    start_claude_login, start_login, switch_account, warmup_account, warmup_all_accounts,
 };
+use crate::types::ToolKind;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,6 +69,16 @@ struct UploadEncryptedArgs {
 #[derive(Debug, Deserialize)]
 struct FileImportArgs {
     path: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolArgs {
+    tool: Option<ToolKind>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeImportArgs {
     name: String,
 }
 
@@ -127,11 +139,21 @@ fn handle_request(mut request: Request, runtime: &Runtime, dist_dir: &Path) -> a
 
 async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, String> {
     match command {
-        "list_accounts" => to_json(list_accounts().await?),
-        "get_active_account_info" => to_json(get_active_account_info().await?),
+        "list_accounts" => {
+            let args: ToolArgs = parse_args(payload)?;
+            to_json(list_accounts(args.tool).await?)
+        }
+        "get_active_account_info" => {
+            let args: ToolArgs = parse_args(payload)?;
+            to_json(get_active_account_info(args.tool).await?)
+        }
         "add_account_from_file" => {
             let args: FileImportArgs = parse_args(payload)?;
             to_json(add_account_from_file(args.path, args.name).await?)
+        }
+        "add_claude_account_from_current" => {
+            let args: ClaudeImportArgs = parse_args(payload)?;
+            to_json(add_claude_account_from_current(args.name).await?)
         }
         "add_account_from_auth_json_text" => {
             let args: UploadAuthJsonArgs = parse_args(payload)?;
@@ -169,6 +191,12 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
         }
         "complete_login" => to_json(complete_login().await?),
         "cancel_login" => to_json(cancel_login().await?),
+        "start_claude_login" => {
+            let args: LoginArgs = parse_args(payload)?;
+            to_json(start_claude_login(args.account_name).await?)
+        }
+        "complete_claude_login" => to_json(complete_claude_login().await?),
+        "cancel_claude_login" => to_json(cancel_claude_login().await?),
         "export_accounts_slim_text" => to_json(export_accounts_slim_text().await?),
         "import_accounts_slim_text" => {
             let args: ImportSlimArgs = parse_args(payload)?;
@@ -190,7 +218,14 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             let args: MaskedIdsArgs = parse_args(payload)?;
             to_json(set_masked_account_ids(args.ids).await?)
         }
-        "check_codex_processes" => to_json(check_codex_processes().await?),
+        "check_processes" => {
+            #[derive(Debug, Deserialize)]
+            struct CheckProcessesArgs {
+                tool: ToolKind,
+            }
+            let args: CheckProcessesArgs = parse_args(payload)?;
+            to_json(check_processes(args.tool).await?)
+        }
         _ => Err(format!("Unsupported web command: {command}")),
     }
 }

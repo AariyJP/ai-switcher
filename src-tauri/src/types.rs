@@ -5,6 +5,19 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolKind {
+    Codex,
+    Claude,
+}
+
+impl Default for ToolKind {
+    fn default() -> Self {
+        Self::Codex
+    }
+}
+
 /// The main storage structure for all accounts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountsStore {
@@ -14,6 +27,8 @@ pub struct AccountsStore {
     pub accounts: Vec<StoredAccount>,
     /// Currently active account ID
     pub active_account_id: Option<String>,
+    #[serde(default)]
+    pub active_claude_account_id: Option<String>,
     /// Set of account IDs that are masked (hidden)
     #[serde(default)]
     pub masked_account_ids: Vec<String>,
@@ -25,7 +40,24 @@ impl Default for AccountsStore {
             version: 1,
             accounts: Vec::new(),
             active_account_id: None,
+            active_claude_account_id: None,
             masked_account_ids: Vec::new(),
+        }
+    }
+}
+
+impl AccountsStore {
+    pub fn active_account_id_for(&self, tool: ToolKind) -> Option<&str> {
+        match tool {
+            ToolKind::Codex => self.active_account_id.as_deref(),
+            ToolKind::Claude => self.active_claude_account_id.as_deref(),
+        }
+    }
+
+    pub fn set_active_account_id_for(&mut self, tool: ToolKind, account_id: Option<String>) {
+        match tool {
+            ToolKind::Codex => self.active_account_id = account_id,
+            ToolKind::Claude => self.active_claude_account_id = account_id,
         }
     }
 }
@@ -44,6 +76,8 @@ pub struct StoredAccount {
     /// Subscription expiration extracted from ChatGPT ID token, when available
     #[serde(default)]
     pub subscription_expires_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub tool: ToolKind,
     /// Authentication mode
     pub auth_mode: AuthMode,
     /// Authentication credentials
@@ -63,6 +97,7 @@ impl StoredAccount {
             email: None,
             plan_type: None,
             subscription_expires_at: None,
+            tool: ToolKind::Codex,
             auth_mode: AuthMode::ApiKey,
             auth_data: AuthData::ApiKey { key: api_key },
             created_at: Utc::now(),
@@ -87,12 +122,37 @@ impl StoredAccount {
             email,
             plan_type,
             subscription_expires_at,
+            tool: ToolKind::Codex,
             auth_mode: AuthMode::ChatGPT,
             auth_data: AuthData::ChatGPT {
                 id_token,
                 access_token,
                 refresh_token,
                 account_id,
+            },
+            created_at: Utc::now(),
+            last_used_at: None,
+        }
+    }
+
+    pub fn new_claude_code(
+        name: String,
+        email: Option<String>,
+        plan_type: Option<String>,
+        credentials: Vec<ClaudeCredential>,
+        oauth_account: Option<serde_json::Value>,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            name,
+            email,
+            plan_type,
+            subscription_expires_at: None,
+            tool: ToolKind::Claude,
+            auth_mode: AuthMode::ClaudeCode,
+            auth_data: AuthData::ClaudeCode {
+                credentials,
+                oauth_account,
             },
             created_at: Utc::now(),
             last_used_at: None,
@@ -108,6 +168,14 @@ pub enum AuthMode {
     ApiKey,
     /// Using ChatGPT OAuth tokens
     ChatGPT,
+    ClaudeCode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeCredential {
+    pub service_name: String,
+    pub account_name: String,
+    pub value: String,
 }
 
 /// Authentication data (credentials)
@@ -129,6 +197,11 @@ pub enum AuthData {
         refresh_token: String,
         /// ChatGPT account ID
         account_id: Option<String>,
+    },
+    ClaudeCode {
+        credentials: Vec<ClaudeCredential>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth_account: Option<serde_json::Value>,
     },
 }
 
@@ -220,6 +293,7 @@ pub struct AccountInfo {
     pub email: Option<String>,
     pub plan_type: Option<String>,
     pub subscription_expires_at: Option<DateTime<Utc>>,
+    pub tool: ToolKind,
     pub auth_mode: AuthMode,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
@@ -232,7 +306,7 @@ impl AccountInfo {
             AuthData::ChatGPT { id_token, .. } => {
                 parse_chatgpt_id_token_claims(id_token).subscription_expires_at
             }
-            AuthData::ApiKey { .. } => None,
+            AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => None,
         };
 
         Self {
@@ -244,6 +318,7 @@ impl AccountInfo {
                 .subscription_expires_at
                 .clone()
                 .or(fallback_subscription_expires_at),
+            tool: account.tool,
             auth_mode: account.auth_mode,
             is_active: active_id == Some(&account.id),
             created_at: account.created_at,
