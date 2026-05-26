@@ -1,4 +1,4 @@
-//! Codex Switcher - Multi-account manager for Codex CLI
+//! AI Switcher - Multi-account manager for AI CLIs
 
 pub mod api;
 pub mod auth;

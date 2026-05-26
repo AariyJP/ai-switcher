@@ -64,8 +64,8 @@ export async function exportFullBackupFile(): Promise<boolean> {
     const { save } = await import("@tauri-apps/plugin-dialog");
     const selected = await save({
       title: "Export Full Encrypted Account Config",
-      defaultPath: "codex-switcher-full.cswf",
-      filters: [{ name: "Codex Switcher Full Backup", extensions: ["cswf"] }],
+      defaultPath: "ai-switcher-full.aisw",
+      filters: [{ name: "AI Switcher Full Backup", extensions: ["aisw"] }],
     });
 
     if (!selected) return false;
@@ -76,7 +76,7 @@ export async function exportFullBackupFile(): Promise<boolean> {
   const contentsBase64 = await invokeBackend<string>("export_accounts_full_encrypted_bytes");
   downloadBase64File(
     contentsBase64,
-    "codex-switcher-full.cswf",
+    "ai-switcher-full.aisw",
     "application/octet-stream"
   );
   return true;
@@ -88,7 +88,7 @@ export async function importFullBackupFile(): Promise<ImportAccountsSummary | nu
     const selected = await open({
       multiple: false,
       title: "Import Full Encrypted Account Config",
-      filters: [{ name: "Codex Switcher Full Backup", extensions: ["cswf"] }],
+      filters: [{ name: "AI Switcher Full Backup", extensions: ["aisw"] }],
     });
 
     if (!selected || Array.isArray(selected)) return null;
@@ -97,7 +97,7 @@ export async function importFullBackupFile(): Promise<ImportAccountsSummary | nu
     });
   }
 
-  const selected = await pickBrowserFile(".cswf,application/octet-stream");
+  const selected = await pickBrowserFile(".aisw,application/octet-stream");
   if (!selected) return null;
 
   const contentsBase64 = await fileToBase64(selected);

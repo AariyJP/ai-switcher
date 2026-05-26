@@ -19,7 +19,7 @@
 ## Backend
 - Tauri commands registered from `src-tauri/src/commands/mod.rs`; each domain (account/oauth/process/usage) is its own file.
 - Auth/credential persistence lives under `src-tauri/src/auth/storage.rs`; switching logic in `auth/switcher.rs`; OAuth callback HTTP in `auth/oauth_server.rs`.
-- `codex-web` (bin) re-uses the same command functions and exposes them at `/api/invoke/<cmd>` — keep new commands callable from both.
+- `ai-web` (bin) re-uses the same command functions and exposes them at `/api/invoke/<cmd>` — keep new commands callable from both.
 
 ## App-identity strings
-- Crate name (`codex-switcher`), package name, and bundle identifier still reference "codex". Don't rename without coordinating with `scripts/release.mjs` and the per-platform `tauri.*.conf.json` files.
+- Crate name is `ai-switcher`, lib is `ai_switcher_lib`, bundle identifier is `ai-switcher.ai-switcher`, product name is "AI Switcher". Changes to these must stay in sync across `Cargo.toml`, `package.json`, `tauri*.conf.json`, `scripts/release.mjs`, and `scripts/bump-version.mjs`.

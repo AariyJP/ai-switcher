@@ -91,7 +91,7 @@ pub fn run_lan_server(host: &str, port: u16) -> anyhow::Result<()> {
         .join("..")
         .join("dist");
 
-    println!("Codex Switcher web server listening on http://{address}");
+    println!("AI Switcher web server listening on http://{address}");
     println!("Serving static files from {}", dist_dir.display());
 
     for request in server.incoming_requests() {

@@ -1,20 +1,21 @@
 <p align="center">
-  <img src="src-tauri/icons/logo.svg" alt="Codex Switcher" width="128" height="128">
+  <img src="src-tauri/icons/logo.svg" alt="AI Switcher" width="128" height="128">
 </p>
 
-<h1 align="center">Codex Switcher</h1>
+<h1 align="center">AI Switcher</h1>
 
 <p align="center">
-  A Desktop Application for Managing Multiple OpenAI <a href="https://github.com/openai/codex">Codex CLI</a> Accounts<br>
+  A Desktop Application for Managing Multiple AI CLI Accounts<br>
+  (OpenAI <a href="https://github.com/openai/codex">Codex CLI</a> and Anthropic <a href="https://github.com/anthropics/claude-code">Claude Code</a>)<br>
   Easily switch between accounts, monitor usage limits, and stay in control of your quota
 </p>
 
 ## Features
 
-- **Multi-Account Management** – Add and manage multiple Codex accounts in one place
+- **Multi-Account Management** – Add and manage multiple AI CLI accounts in one place
 - **Quick Switching** – Switch between accounts with a single click
 - **Usage Monitoring** – View real-time usage for both 5-hour and weekly limits
-- **Dual Login Mode** – OAuth authentication or import existing `auth.json` files
+- **Dual Login Mode** – OAuth authentication or import existing credential files
 
 ## Installation
 
@@ -28,8 +29,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/Lampese/codex-switcher.git
-cd codex-switcher
+git clone https://github.com/AariyJP/ai-switcher.git
+cd ai-switcher
 
 # Install dependencies
 pnpm install
@@ -54,8 +55,8 @@ pnpm lan
 
 Optional environment variables:
 
-- `CODEX_SWITCHER_WEB_HOST` to override the bind host
-- `CODEX_SWITCHER_WEB_PORT` to override the port
+- `AI_SWITCHER_WEB_HOST` to override the bind host
+- `AI_SWITCHER_WEB_PORT` to override the port
 
 The browser dashboard serves the same UI and backend actions through `/api/invoke/*`, which makes it usable over LAN, Tailscale, or a remote host tunnel when you expose the chosen port safely.
 
