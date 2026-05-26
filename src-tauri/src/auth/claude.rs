@@ -184,9 +184,45 @@ fn read_current_claude_credentials() -> Result<Vec<ClaudeCredential>> {
     Ok(credentials)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn claude_credentials_path() -> Result<std::path::PathBuf> {
+    let home = dirs::home_dir().context("Could not find home directory")?;
+    Ok(home.join(".claude").join(".credentials.json"))
+}
+
+#[cfg(target_os = "windows")]
 fn read_current_claude_credentials() -> Result<Vec<ClaudeCredential>> {
-    anyhow::bail!("Claude Code switching is currently supported on macOS");
+    let path = claude_credentials_path()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read Claude credentials: {}", path.display()))?;
+    let root: Value = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse Claude credentials: {}", path.display()))?;
+
+    let Some(oauth) = root.get("claudeAiOauth") else {
+        return Ok(Vec::new());
+    };
+
+    let mut wrapper = serde_json::Map::new();
+    wrapper.insert("claudeAiOauth".to_string(), oauth.clone());
+    let value = serde_json::to_string(&Value::Object(wrapper))
+        .context("Failed to serialize Claude credential value")?;
+
+    let account_name = std::env::var("USERNAME").unwrap_or_default();
+
+    Ok(vec![ClaudeCredential {
+        service_name: CLAUDE_KEYCHAIN_SERVICE_PREFIX.to_string(),
+        account_name,
+        value,
+    }])
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn read_current_claude_credentials() -> Result<Vec<ClaudeCredential>> {
+    anyhow::bail!("Claude Code switching is currently supported on macOS and Windows");
 }
 
 #[cfg(target_os = "macos")]
@@ -214,9 +250,56 @@ fn write_claude_credentials(credentials: &[ClaudeCredential]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn write_claude_credentials(credentials: &[ClaudeCredential]) -> Result<()> {
+    let path = claude_credentials_path()?;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+    }
+
+    let mut root: Value = if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read Claude credentials: {}", path.display()))?;
+        serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse Claude credentials: {}", path.display()))?
+    } else {
+        Value::Object(serde_json::Map::new())
+    };
+
+    let Some(map) = root.as_object_mut() else {
+        anyhow::bail!(
+            "Claude credentials file is not a JSON object: {}",
+            path.display()
+        );
+    };
+
+    let credential = credentials
+        .iter()
+        .find(|c| c.service_name.starts_with(CLAUDE_KEYCHAIN_SERVICE_PREFIX))
+        .context("Claude Code account has no Claude Code-credentials entry")?;
+
+    let parsed: Value = serde_json::from_str(&credential.value)
+        .context("Failed to parse stored Claude credential value as JSON")?;
+    let Some(oauth) = parsed.get("claudeAiOauth").cloned() else {
+        anyhow::bail!("Stored Claude credential is missing claudeAiOauth field");
+    };
+
+    map.insert("claudeAiOauth".to_string(), oauth);
+
+    let serialized = serde_json::to_string_pretty(&root)
+        .context("Failed to serialize Claude credentials")?;
+
+    std::fs::write(&path, serialized)
+        .with_context(|| format!("Failed to write Claude credentials: {}", path.display()))?;
+
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn write_claude_credentials(_credentials: &[ClaudeCredential]) -> Result<()> {
-    anyhow::bail!("Claude Code switching is currently supported on macOS");
+    anyhow::bail!("Claude Code switching is currently supported on macOS and Windows");
 }
 
 #[cfg(target_os = "macos")]
