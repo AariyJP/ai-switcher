@@ -28,7 +28,7 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
     let updated = match &account.auth_data {
-        AuthData::ApiKey { .. } => account,
+        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => account,
         AuthData::ChatGPT { .. } => {
             let refreshed = refresh_chatgpt_tokens(&account)
                 .await

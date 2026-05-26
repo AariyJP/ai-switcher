@@ -5,10 +5,11 @@ import type {
   AccountWithUsage,
   WarmupSummary,
   ImportAccountsSummary,
+  ToolKind,
 } from "../types";
 import { invokeBackend, type FileSource } from "../lib/platform";
 
-export function useAccounts() {
+export function useAccounts(tool: ToolKind = "codex") {
   const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +63,7 @@ export function useAccounts() {
     try {
       setLoading(true);
       setError(null);
-      const accountList = await invokeBackend<AccountInfo[]>("list_accounts");
+      const accountList = await invokeBackend<AccountInfo[]>("list_accounts", { tool });
       
       if (preserveUsage) {
         // Preserve existing usage data when just updating account info
@@ -86,7 +87,7 @@ export function useAccounts() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tool]);
 
   const refreshUsage = useCallback(
     async (
@@ -99,7 +100,7 @@ export function useAccounts() {
           return;
         }
 
-        if (options?.refreshMetadata) {
+        if (options?.refreshMetadata && tool === "codex") {
           await runWithConcurrency(
             list,
             async (account) => {
@@ -161,7 +162,7 @@ export function useAccounts() {
         throw err;
       }
     },
-    [buildUsageError, loadAccounts, maxConcurrentUsageRequests, runWithConcurrency]
+    [buildUsageError, loadAccounts, maxConcurrentUsageRequests, runWithConcurrency, tool]
   );
 
   const refreshSingleUsage = useCallback(async (
@@ -169,7 +170,7 @@ export function useAccounts() {
     options?: { refreshMetadata?: boolean }
   ) => {
     try {
-      if (options?.refreshMetadata) {
+      if (options?.refreshMetadata && tool === "codex") {
         await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
         await loadAccounts(true);
       }
@@ -201,25 +202,35 @@ export function useAccounts() {
       );
       throw err;
     }
-  }, [buildUsageError, loadAccounts]);
+  }, [buildUsageError, loadAccounts, tool]);
 
   const warmupAccount = useCallback(async (accountId: string) => {
     try {
+      if (tool !== "codex") {
+        return;
+      }
       await invokeBackend("warmup_account", { accountId });
     } catch (err) {
       console.error("Failed to warm up account:", err);
       throw err;
     }
-  }, []);
+  }, [tool]);
 
   const warmupAllAccounts = useCallback(async () => {
     try {
+      if (tool !== "codex") {
+        return {
+          total_accounts: 0,
+          warmed_accounts: 0,
+          failed_account_ids: [],
+        };
+      }
       return await invokeBackend<WarmupSummary>("warmup_all_accounts");
     } catch (err) {
       console.error("Failed to warm up all accounts:", err);
       throw err;
     }
-  }, []);
+  }, [tool]);
 
   const switchAccount = useCallback(
     async (accountId: string) => {
@@ -260,6 +271,10 @@ export function useAccounts() {
   const importFromFile = useCallback(
     async (source: FileSource, name: string) => {
       try {
+        if (tool !== "codex") {
+          throw new Error("File import is only available for Codex accounts");
+        }
+
         if (typeof source === "string") {
           await invokeBackend<AccountInfo>("add_account_from_file", { path: source, name });
         } else {
@@ -275,7 +290,23 @@ export function useAccounts() {
         throw err;
       }
     },
-    [loadAccounts, refreshUsage]
+    [loadAccounts, refreshUsage, tool]
+  );
+
+  const addClaudeFromCurrent = useCallback(
+    async (name: string) => {
+      try {
+        if (tool !== "claude") {
+          throw new Error("Claude import is only available on the Claude tab");
+        }
+
+        await invokeBackend<AccountInfo>("add_claude_account_from_current", { name });
+        await loadAccounts();
+      } catch (err) {
+        throw err;
+      }
+    },
+    [loadAccounts, tool]
   );
 
   const startOAuthLogin = useCallback(async (accountName: string) => {
@@ -379,15 +410,17 @@ export function useAccounts() {
   }, []);
 
   useEffect(() => {
-    loadAccounts().then((accountList) => refreshUsage(accountList));
-    
+    loadAccounts().then((accountList) => {
+      refreshUsage(accountList);
+    });
+
     // Auto-refresh usage every 60 seconds (same as official Codex CLI)
     const interval = setInterval(() => {
       refreshUsage().catch(() => {});
     }, 60000);
     
     return () => clearInterval(interval);
-  }, [loadAccounts, refreshUsage]);
+  }, [loadAccounts, refreshUsage, tool]);
 
   return {
     accounts,
@@ -402,6 +435,7 @@ export function useAccounts() {
     deleteAccount,
     renameAccount,
     importFromFile,
+    addClaudeFromCurrent,
     exportAccountsSlimText,
     importAccountsSlimText,
     exportAccountsFullEncryptedFile,

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
-use crate::types::{AccountsStore, AuthData, StoredAccount};
+use crate::types::{AccountsStore, AuthData, ClaudeCredential, StoredAccount};
 
 /// Get the path to the codex-switcher config directory
 pub fn get_config_dir() -> Result<PathBuf> {
@@ -68,16 +68,21 @@ pub fn add_account(account: StoredAccount) -> Result<StoredAccount> {
     let mut store = load_accounts()?;
 
     // Check for duplicate names
-    if store.accounts.iter().any(|a| a.name == account.name) {
+    if store
+        .accounts
+        .iter()
+        .any(|a| a.tool == account.tool && a.name == account.name)
+    {
         anyhow::bail!("An account with name '{}' already exists", account.name);
     }
 
     let account_clone = account.clone();
+    let tool = account_clone.tool;
     store.accounts.push(account);
 
     // If this is the first account, make it active
-    if store.accounts.len() == 1 {
-        store.active_account_id = Some(account_clone.id.clone());
+    if store.active_account_id_for(tool).is_none() {
+        store.set_active_account_id_for(tool, Some(account_clone.id.clone()));
     }
 
     save_accounts(&store)?;
@@ -88,6 +93,11 @@ pub fn add_account(account: StoredAccount) -> Result<StoredAccount> {
 pub fn remove_account(account_id: &str) -> Result<()> {
     let mut store = load_accounts()?;
 
+    let removed_tool = store
+        .accounts
+        .iter()
+        .find(|a| a.id == account_id)
+        .map(|a| a.tool);
     let initial_len = store.accounts.len();
     store.accounts.retain(|a| a.id != account_id);
 
@@ -96,8 +106,15 @@ pub fn remove_account(account_id: &str) -> Result<()> {
     }
 
     // If we removed the active account, clear it or set to first available
-    if store.active_account_id.as_deref() == Some(account_id) {
-        store.active_account_id = store.accounts.first().map(|a| a.id.clone());
+    if let Some(tool) = removed_tool {
+        if store.active_account_id_for(tool) == Some(account_id) {
+            let next = store
+                .accounts
+                .iter()
+                .find(|a| a.tool == tool)
+                .map(|a| a.id.clone());
+            store.set_active_account_id_for(tool, next);
+        }
     }
 
     save_accounts(&store)?;
@@ -109,11 +126,14 @@ pub fn set_active_account(account_id: &str) -> Result<()> {
     let mut store = load_accounts()?;
 
     // Verify the account exists
-    if !store.accounts.iter().any(|a| a.id == account_id) {
-        anyhow::bail!("Account not found: {account_id}");
-    }
+    let tool = store
+        .accounts
+        .iter()
+        .find(|a| a.id == account_id)
+        .map(|a| a.tool)
+        .ok_or_else(|| anyhow::anyhow!("Account not found: {account_id}"))?;
 
-    store.active_account_id = Some(account_id.to_string());
+    store.set_active_account_id_for(tool, Some(account_id.to_string()));
     save_accounts(&store)?;
     Ok(())
 }
@@ -158,10 +178,17 @@ pub fn update_account_metadata(
 
     // Check for duplicate names first (if renaming)
     if let Some(ref new_name) = name {
+        let current_tool = store
+            .accounts
+            .iter()
+            .find(|a| a.id == account_id)
+            .map(|a| a.tool)
+            .context("Account not found")?;
+
         if store
             .accounts
             .iter()
-            .any(|a| a.id != account_id && a.name == *new_name)
+            .any(|a| a.id != account_id && a.tool == current_tool && a.name == *new_name)
         {
             anyhow::bail!("An account with name '{new_name}' already exists");
         }
@@ -228,7 +255,7 @@ pub fn update_account_chatgpt_tokens(
                 *stored_account_id = Some(new_account_id);
             }
         }
-        AuthData::ApiKey { .. } => {
+        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => {
             anyhow::bail!("Cannot update OAuth tokens for an API key account");
         }
     }
@@ -243,6 +270,34 @@ pub fn update_account_chatgpt_tokens(
 
     if let Some(subscription_expires_at) = subscription_expires_at {
         account.subscription_expires_at = Some(subscription_expires_at);
+    }
+
+    let updated = account.clone();
+    save_accounts(&store)?;
+    Ok(updated)
+}
+
+pub fn update_account_claude_credentials(
+    account_id: &str,
+    credentials: Vec<ClaudeCredential>,
+) -> Result<StoredAccount> {
+    let mut store = load_accounts()?;
+
+    let account = store
+        .accounts
+        .iter_mut()
+        .find(|a| a.id == account_id)
+        .context("Account not found")?;
+
+    match &mut account.auth_data {
+        AuthData::ClaudeCode {
+            credentials: stored_credentials,
+        } => {
+            *stored_credentials = credentials;
+        }
+        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {
+            anyhow::bail!("Cannot update Claude credentials for a non-Claude account");
+        }
     }
 
     let updated = account.clone();
