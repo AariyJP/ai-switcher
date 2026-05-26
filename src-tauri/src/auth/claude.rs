@@ -49,6 +49,8 @@ pub fn switch_to_claude_account(account: &StoredAccount) -> Result<()> {
         if let Err(err) = write_claude_oauth_account(oauth_account) {
             println!("[Claude] Failed to update ~/.claude.json oauthAccount: {err}");
         }
+    } else if let Err(err) = ensure_claude_onboarding_flags() {
+        println!("[Claude] Failed to update ~/.claude.json onboarding flags: {err}");
     }
 
     Ok(())
@@ -68,6 +70,19 @@ pub fn read_claude_oauth_account() -> Result<Option<Value>> {
 }
 
 pub fn write_claude_oauth_account(oauth_account: &Value) -> Result<()> {
+    update_claude_config(|map| {
+        map.insert("oauthAccount".to_string(), oauth_account.clone());
+    })
+}
+
+pub fn ensure_claude_onboarding_flags() -> Result<()> {
+    update_claude_config(|_| {})
+}
+
+fn update_claude_config<F>(mutator: F) -> Result<()>
+where
+    F: FnOnce(&mut serde_json::Map<String, Value>),
+{
     let home = dirs::home_dir().context("Could not find home directory")?;
     let path = home.join(".claude.json");
 
@@ -83,7 +98,18 @@ pub fn write_claude_oauth_account(oauth_account: &Value) -> Result<()> {
     let Some(map) = value.as_object_mut() else {
         anyhow::bail!("~/.claude.json root is not a JSON object");
     };
-    map.insert("oauthAccount".to_string(), oauth_account.clone());
+
+    mutator(map);
+
+    if !matches!(map.get("hasCompletedOnboarding"), Some(Value::Bool(true))) {
+        map.insert("hasCompletedOnboarding".to_string(), Value::Bool(true));
+    }
+    if !matches!(map.get("hasTrustDialogAccepted"), Some(Value::Bool(true))) {
+        map.insert("hasTrustDialogAccepted".to_string(), Value::Bool(true));
+    }
+    if !matches!(map.get("theme"), Some(Value::String(_))) {
+        map.insert("theme".to_string(), Value::String("dark".to_string()));
+    }
 
     let serialized =
         serde_json::to_string_pretty(&value).context("Failed to serialize Claude config")?;
@@ -252,9 +278,16 @@ fn read_keychain_password(service_name: &str, account_name: &str) -> Result<Stri
 
 #[cfg(target_os = "macos")]
 fn write_keychain_password(credential: &ClaudeCredential) -> Result<()> {
+    let _ = Command::new("security")
+        .arg("delete-generic-password")
+        .arg("-s")
+        .arg(&credential.service_name)
+        .arg("-a")
+        .arg(&credential.account_name)
+        .output();
+
     let output = Command::new("security")
         .arg("add-generic-password")
-        .arg("-U")
         .arg("-A")
         .arg("-s")
         .arg(&credential.service_name)
