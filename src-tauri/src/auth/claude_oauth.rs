@@ -17,12 +17,12 @@ use tokio::sync::oneshot;
 
 use crate::types::{ClaudeCredential, OAuthLoginInfo, StoredAccount};
 
-const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
+const AUTHORIZE_URL: &str = "https://claude.com/cai/oauth/authorize";
 const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const SCOPES: &str =
-    "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+    "user:file_upload user:inference user:mcp_servers user:profile user:sessions:claude_code";
 const PRIMARY_SERVICE_NAME: &str = "Claude Code-credentials";
 
 #[derive(Debug, Clone)]
@@ -53,8 +53,9 @@ fn generate_state() -> String {
 
 fn build_authorize_url(redirect_uri: &str, pkce: &PkceCodes, state: &str) -> String {
     let params = [
-        ("response_type", "code"),
+        ("code", "true"),
         ("client_id", CLIENT_ID),
+        ("response_type", "code"),
         ("redirect_uri", redirect_uri),
         ("scope", SCOPES),
         ("code_challenge", &pkce.code_challenge),
@@ -87,6 +88,10 @@ fn profile_account_email(profile: &Value) -> Option<String> {
         .get("email")?
         .as_str()
         .map(String::from)
+}
+
+fn normalize_subscription_type(value: &str) -> String {
+    value.strip_prefix("claude_").unwrap_or(value).to_string()
 }
 
 fn profile_organization_type(profile: &Value) -> Option<String> {
@@ -244,7 +249,10 @@ fn build_credential_value(tokens: &TokenResponse, profile: Option<&Value>) -> Re
 
     if let Some(profile) = profile {
         if let Some(org_type) = profile_organization_type(profile) {
-            oauth.insert("subscriptionType".to_string(), json!(org_type));
+            oauth.insert(
+                "subscriptionType".to_string(),
+                json!(normalize_subscription_type(&org_type)),
+            );
         }
         if let Some(tier) = profile_organization_rate_limit_tier(profile) {
             oauth.insert("rateLimitTier".to_string(), json!(tier));
@@ -453,7 +461,10 @@ async fn handle_oauth_request(
 
     let profile = fetch_profile(&tokens.access_token).await;
     let email = profile.as_ref().and_then(profile_account_email);
-    let plan_type = profile.as_ref().and_then(profile_organization_type);
+    let plan_type = profile
+        .as_ref()
+        .and_then(profile_organization_type)
+        .map(|value| normalize_subscription_type(&value));
     let oauth_account = profile.as_ref().and_then(build_oauth_account_from_profile);
 
     let credential_value = match build_credential_value(&tokens, profile.as_ref()) {
