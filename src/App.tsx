@@ -51,8 +51,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import "./App.css";
 
-const THEME_STORAGE_KEY = "codex-switcher-theme";
-const ACTIVE_TOOL_STORAGE_KEY = "ac-switcher-active-tool";
+const THEME_STORAGE_KEY = "ai-switcher-theme";
+const ACTIVE_TOOL_STORAGE_KEY = "ai-switcher-active-tool";
 type ThemeMode = "light" | "dark" | "system";
 type ActiveTool = "codex" | "claude";
 type SortKey =
