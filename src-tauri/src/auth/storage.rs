@@ -8,6 +8,8 @@ use chrono::{DateTime, Utc};
 
 use crate::types::{AccountsStore, AuthData, ClaudeCredential, StoredAccount};
 
+const LEGACY_CONFIG_DIR_NAME: &str = ".codex-switcher";
+
 /// Get the path to the ai-switcher config directory
 pub fn get_config_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not find home directory")?;
@@ -19,8 +21,51 @@ pub fn get_accounts_file() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("accounts.json"))
 }
 
+fn legacy_accounts_file() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("Could not find home directory")?;
+    Ok(home.join(LEGACY_CONFIG_DIR_NAME).join("accounts.json"))
+}
+
+/// One-time migration: copy the legacy accounts.json into the new config dir if
+/// the new file does not yet exist. Leaves the legacy file in place so an
+/// older build can still be rolled back to.
+fn migrate_legacy_accounts_if_needed() -> Result<()> {
+    let new_path = get_accounts_file()?;
+    if new_path.exists() {
+        return Ok(());
+    }
+
+    let legacy_path = legacy_accounts_file()?;
+    if !legacy_path.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = new_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+    }
+
+    fs::copy(&legacy_path, &new_path).with_context(|| {
+        format!(
+            "Failed to migrate legacy accounts file: {} -> {}",
+            legacy_path.display(),
+            new_path.display()
+        )
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o600);
+        let _ = fs::set_permissions(&new_path, perms);
+    }
+
+    Ok(())
+}
+
 /// Load the accounts store from disk
 pub fn load_accounts() -> Result<AccountsStore> {
+    migrate_legacy_accounts_if_needed()?;
     let path = get_accounts_file()?;
 
     if !path.exists() {
