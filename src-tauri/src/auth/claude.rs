@@ -95,7 +95,7 @@ fn read_current_claude_credentials() -> Result<Vec<ClaudeCredential>> {
     let mut credentials = Vec::with_capacity(services.len());
 
     for (service_name, account_name) in services {
-        let value = read_keychain_password(&service_name)?;
+        let value = read_keychain_password(&service_name, &account_name)?;
         credentials.push(ClaudeCredential {
             service_name,
             account_name,
@@ -183,8 +183,19 @@ fn list_claude_keychain_items() -> Result<Vec<(String, String)>> {
 }
 
 #[cfg(target_os = "macos")]
-fn read_keychain_password(service_name: &str) -> Result<String> {
-    run_security(["find-generic-password", "-s", service_name, "-w"])
+fn read_keychain_password(service_name: &str, account_name: &str) -> Result<String> {
+    if account_name.is_empty() {
+        run_security(["find-generic-password", "-s", service_name, "-w"])
+    } else {
+        run_security([
+            "find-generic-password",
+            "-s",
+            service_name,
+            "-a",
+            account_name,
+            "-w",
+        ])
+    }
 }
 
 #[cfg(target_os = "macos")]
