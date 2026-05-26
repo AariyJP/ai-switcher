@@ -5,10 +5,11 @@ import type {
   AccountWithUsage,
   WarmupSummary,
   ImportAccountsSummary,
+  ToolKind,
 } from "../types";
 import { invokeBackend, type FileSource } from "../lib/platform";
 
-export function useAccounts() {
+export function useAccounts(tool: ToolKind = "codex") {
   const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -18,6 +19,9 @@ export function useAccounts() {
   useEffect(() => {
     accountsRef.current = accounts;
   }, [accounts]);
+
+  const fetchedToolsRef = useRef<Set<ToolKind>>(new Set());
+  const usageCacheRef = useRef<Map<string, UsageInfo>>(new Map());
 
   const buildUsageError = useCallback(
     (accountId: string, message: string, planType: string | null): UsageInfo => ({
@@ -62,23 +66,22 @@ export function useAccounts() {
     try {
       setLoading(true);
       setError(null);
-      const accountList = await invokeBackend<AccountInfo[]>("list_accounts");
-      
-      if (preserveUsage) {
-        // Preserve existing usage data when just updating account info
-        setAccounts((prev) => {
-          const usageMap = new Map(
-            prev.map((a) => [a.id, { usage: a.usage, usageLoading: a.usageLoading }])
-          );
-          return accountList.map((a) => ({
+      const accountList = await invokeBackend<AccountInfo[]>("list_accounts", { tool });
+
+      setAccounts((prev) => {
+        const prevMap = preserveUsage
+          ? new Map(prev.map((a) => [a.id, { usage: a.usage, usageLoading: a.usageLoading }]))
+          : null;
+        return accountList.map((a) => {
+          const fromPrev = prevMap?.get(a.id);
+          const cached = usageCacheRef.current.get(a.id);
+          return {
             ...a,
-            usage: usageMap.get(a.id)?.usage,
-            usageLoading: usageMap.get(a.id)?.usageLoading,
-          }));
+            usage: fromPrev?.usage ?? cached,
+            usageLoading: fromPrev?.usageLoading ?? false,
+          };
         });
-      } else {
-        setAccounts(accountList.map((a) => ({ ...a, usageLoading: false })));
-      }
+      });
       return accountList;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -86,7 +89,7 @@ export function useAccounts() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tool]);
 
   const refreshUsage = useCallback(
     async (
@@ -99,7 +102,7 @@ export function useAccounts() {
           return;
         }
 
-        if (options?.refreshMetadata) {
+        if (options?.refreshMetadata && tool === "codex") {
           await runWithConcurrency(
             list,
             async (account) => {
@@ -133,13 +136,13 @@ export function useAccounts() {
                 accountId: account.id,
               });
               usageResults.set(account.id, usage);
+              usageCacheRef.current.set(account.id, usage);
             } catch (err) {
               console.error("Failed to refresh usage:", err);
               const message = err instanceof Error ? err.message : String(err);
-              usageResults.set(
-                account.id,
-                buildUsageError(account.id, message, account.plan_type ?? null)
-              );
+              const errInfo = buildUsageError(account.id, message, account.plan_type ?? null);
+              usageResults.set(account.id, errInfo);
+              usageCacheRef.current.set(account.id, errInfo);
             }
           },
           maxConcurrentUsageRequests
@@ -161,7 +164,7 @@ export function useAccounts() {
         throw err;
       }
     },
-    [buildUsageError, loadAccounts, maxConcurrentUsageRequests, runWithConcurrency]
+    [buildUsageError, loadAccounts, maxConcurrentUsageRequests, runWithConcurrency, tool]
   );
 
   const refreshSingleUsage = useCallback(async (
@@ -169,7 +172,7 @@ export function useAccounts() {
     options?: { refreshMetadata?: boolean }
   ) => {
     try {
-      if (options?.refreshMetadata) {
+      if (options?.refreshMetadata && tool === "codex") {
         await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
         await loadAccounts(true);
       }
@@ -180,6 +183,7 @@ export function useAccounts() {
         )
       );
       const usage = await invokeBackend<UsageInfo>("get_usage", { accountId });
+      usageCacheRef.current.set(accountId, usage);
       setAccounts((prev) =>
         prev.map((a) =>
           a.id === accountId ? { ...a, usage, usageLoading: false } : a
@@ -188,38 +192,47 @@ export function useAccounts() {
     } catch (err) {
       console.error("Failed to refresh single usage:", err);
       const message = err instanceof Error ? err.message : String(err);
+      const account = accountsRef.current.find((a) => a.id === accountId);
+      const errInfo = buildUsageError(accountId, message, account?.plan_type ?? null);
+      usageCacheRef.current.set(accountId, errInfo);
       setAccounts((prev) =>
         prev.map((a) =>
           a.id === accountId
-            ? {
-                ...a,
-                usage: buildUsageError(accountId, message, a.plan_type ?? null),
-                usageLoading: false,
-              }
+            ? { ...a, usage: errInfo, usageLoading: false }
             : a
         )
       );
       throw err;
     }
-  }, [buildUsageError, loadAccounts]);
+  }, [buildUsageError, loadAccounts, tool]);
 
   const warmupAccount = useCallback(async (accountId: string) => {
     try {
+      if (tool !== "codex") {
+        return;
+      }
       await invokeBackend("warmup_account", { accountId });
     } catch (err) {
       console.error("Failed to warm up account:", err);
       throw err;
     }
-  }, []);
+  }, [tool]);
 
   const warmupAllAccounts = useCallback(async () => {
     try {
+      if (tool !== "codex") {
+        return {
+          total_accounts: 0,
+          warmed_accounts: 0,
+          failed_account_ids: [],
+        };
+      }
       return await invokeBackend<WarmupSummary>("warmup_all_accounts");
     } catch (err) {
       console.error("Failed to warm up all accounts:", err);
       throw err;
     }
-  }, []);
+  }, [tool]);
 
   const switchAccount = useCallback(
     async (accountId: string) => {
@@ -237,6 +250,7 @@ export function useAccounts() {
     async (accountId: string) => {
       try {
         await invokeBackend("delete_account", { accountId });
+        usageCacheRef.current.delete(accountId);
         await loadAccounts();
       } catch (err) {
         throw err;
@@ -260,6 +274,10 @@ export function useAccounts() {
   const importFromFile = useCallback(
     async (source: FileSource, name: string) => {
       try {
+        if (tool !== "codex") {
+          throw new Error("File import is only available for Codex accounts");
+        }
+
         if (typeof source === "string") {
           await invokeBackend<AccountInfo>("add_account_from_file", { path: source, name });
         } else {
@@ -275,7 +293,25 @@ export function useAccounts() {
         throw err;
       }
     },
-    [loadAccounts, refreshUsage]
+    [loadAccounts, refreshUsage, tool]
+  );
+
+  const addClaudeFromCurrent = useCallback(
+    async (name: string) => {
+      try {
+        if (tool !== "claude") {
+          throw new Error("Claude import is only available on the Claude tab");
+        }
+
+        await invokeBackend<AccountInfo>("add_claude_account_from_current", { name });
+        const accountList = await loadAccounts();
+        fetchedToolsRef.current.add(tool);
+        await refreshUsage(accountList);
+      } catch (err) {
+        throw err;
+      }
+    },
+    [loadAccounts, refreshUsage, tool]
   );
 
   const startOAuthLogin = useCallback(async (accountName: string) => {
@@ -361,6 +397,37 @@ export function useAccounts() {
     }
   }, []);
 
+  const startClaudeOAuthLogin = useCallback(async (accountName: string) => {
+    try {
+      const info = await invokeBackend<{ auth_url: string; callback_port: number }>(
+        "start_claude_login",
+        { accountName }
+      );
+      return info;
+    } catch (err) {
+      throw err;
+    }
+  }, []);
+
+  const completeClaudeOAuthLogin = useCallback(async () => {
+    try {
+      const account = await invokeBackend<AccountInfo>("complete_claude_login");
+      const accountList = await loadAccounts();
+      await refreshUsage(accountList);
+      return account;
+    } catch (err) {
+      throw err;
+    }
+  }, [loadAccounts, refreshUsage]);
+
+  const cancelClaudeOAuthLogin = useCallback(async () => {
+    try {
+      await invokeBackend("cancel_claude_login");
+    } catch (err) {
+      console.error("Failed to cancel Claude login:", err);
+    }
+  }, []);
+
   const loadMaskedAccountIds = useCallback(async () => {
     try {
       return await invokeBackend<string[]>("get_masked_account_ids");
@@ -379,15 +446,18 @@ export function useAccounts() {
   }, []);
 
   useEffect(() => {
-    loadAccounts().then((accountList) => refreshUsage(accountList));
-    
-    // Auto-refresh usage every 60 seconds (same as official Codex CLI)
-    const interval = setInterval(() => {
-      refreshUsage().catch(() => {});
-    }, 60000);
-    
-    return () => clearInterval(interval);
-  }, [loadAccounts, refreshUsage]);
+    setAccounts([]);
+    loadAccounts().then((accountList) => {
+      if (fetchedToolsRef.current.has(tool)) {
+        return;
+      }
+      if (accountList.length === 0) {
+        return;
+      }
+      fetchedToolsRef.current.add(tool);
+      refreshUsage(accountList);
+    });
+  }, [loadAccounts, refreshUsage, tool]);
 
   return {
     accounts,
@@ -402,6 +472,7 @@ export function useAccounts() {
     deleteAccount,
     renameAccount,
     importFromFile,
+    addClaudeFromCurrent,
     exportAccountsSlimText,
     importAccountsSlimText,
     exportAccountsFullEncryptedFile,
@@ -409,6 +480,9 @@ export function useAccounts() {
     startOAuthLogin,
     completeOAuthLogin,
     cancelOAuthLogin,
+    startClaudeOAuthLogin,
+    completeClaudeOAuthLogin,
+    cancelClaudeOAuthLogin,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
   };

@@ -4,17 +4,20 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::{stream, StreamExt};
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, USER_AGENT},
+    header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT},
     StatusCode,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-use crate::auth::{ensure_chatgpt_tokens_fresh, refresh_chatgpt_tokens};
+use crate::auth::{
+    ensure_chatgpt_tokens_fresh, ensure_claude_tokens_fresh, refresh_chatgpt_tokens,
+    refresh_claude_tokens, sync_active_claude_account_credentials,
+};
 use crate::types::{
-    AuthData, CreditStatusDetails, RateLimitDetails, RateLimitStatusPayload, RateLimitWindow,
-    StoredAccount, UsageInfo,
+    AuthData, ClaudeCredential, CreditStatusDetails, RateLimitDetails, RateLimitStatusPayload,
+    RateLimitWindow, StoredAccount, UsageInfo,
 };
 
 const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
@@ -23,6 +26,9 @@ const CHATGPT_ACCOUNTS_CHECK_API: &str =
 const CHATGPT_CODEX_RESPONSES_API: &str = "https://chatgpt.com/backend-api/codex/responses";
 const OPENAI_API: &str = "https://api.openai.com/v1";
 const CODEX_USER_AGENT: &str = "codex-cli/1.0.0";
+const CLAUDE_API: &str = "https://api.anthropic.com/api";
+const CLAUDE_USER_AGENT: &str = "claude-code/2.1.142";
+const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
 
 #[derive(Debug, Clone)]
 pub struct ChatGptAccountMetadata {
@@ -56,6 +62,28 @@ struct AccountsCheckEntitlement {
     expires_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ClaudeStoredCredential {
+    #[serde(rename = "claudeAiOauth", default)]
+    claude_ai_oauth: Option<ClaudeOauthCredentials>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ClaudeOauthCredentials {
+    #[serde(rename = "accessToken")]
+    access_token: String,
+    #[serde(rename = "subscriptionType", default)]
+    subscription_type: Option<String>,
+    #[serde(rename = "rateLimitTier", default)]
+    rate_limit_tier: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ClaudeUsageLimit {
+    used_percent: f64,
+    resets_at: Option<i64>,
+}
+
 /// Get usage information for an account
 pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
     println!("[Usage] Fetching usage for account: {}", account.name);
@@ -78,6 +106,7 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
                 error: Some("Usage info not available for API key accounts".to_string()),
             })
         }
+        AuthData::ClaudeCode { .. } => get_usage_with_claude_auth(account).await,
         AuthData::ChatGPT { .. } => get_usage_with_chatgpt_auth(account).await,
     }
 }
@@ -92,6 +121,7 @@ pub async fn warmup_account(account: &StoredAccount) -> Result<()> {
     match &account.auth_data {
         AuthData::ApiKey { key } => warmup_with_api_key(key).await,
         AuthData::ChatGPT { .. } => warmup_with_chatgpt_auth(account).await,
+        AuthData::ClaudeCode { .. } => anyhow::bail!("Claude Code accounts don't support warm-up"),
     }
 }
 
@@ -156,6 +186,56 @@ async fn get_usage_with_chatgpt_auth(account: &StoredAccount) -> Result<UsageInf
     parse_usage_response(&fresh_account.id, &fresh_account.name, response).await
 }
 
+async fn get_usage_with_claude_auth(account: &StoredAccount) -> Result<UsageInfo> {
+    let synced_account = sync_active_claude_account_credentials(account)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| account.clone());
+    let fresh_account = match ensure_claude_tokens_fresh(&synced_account).await {
+        Ok(account) => account,
+        Err(err) => {
+            println!(
+                "[Usage] Claude pre-refresh failed for account {}: {}",
+                synced_account.name, err
+            );
+            synced_account.clone()
+        }
+    };
+    let oauth = extract_claude_auth(&fresh_account)?;
+
+    let response = send_claude_usage_request(&oauth.access_token).await?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        println!(
+            "[Usage] Unauthorized for Claude account {}, refreshing token and retrying once",
+            fresh_account.name
+        );
+        let retry_source = sync_active_claude_account_credentials(&fresh_account)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| fresh_account.clone());
+        let refreshed_account = match refresh_claude_tokens(&retry_source).await {
+            Ok(account) => account,
+            Err(err) => {
+                return Ok(UsageInfo::error(
+                    retry_source.id.clone(),
+                    format_claude_auth_error(&err.to_string()),
+                ));
+            }
+        };
+        let retry_oauth = extract_claude_auth(&refreshed_account)?;
+        let retry_response = send_claude_usage_request(&retry_oauth.access_token).await?;
+        if retry_response.status() == StatusCode::UNAUTHORIZED {
+            return Ok(UsageInfo::error(
+                refreshed_account.id.clone(),
+                "Claude login expired. Open Claude Code and sign in again, then import the current Claude account again.".to_string(),
+            ));
+        }
+        return parse_claude_usage_response(&refreshed_account, retry_oauth, retry_response).await;
+    }
+
+    parse_claude_usage_response(&fresh_account, oauth, response).await
+}
+
 async fn parse_usage_response(
     account_id: &str,
     account_name: &str,
@@ -191,6 +271,43 @@ async fn parse_usage_response(
     println!(
         "[Usage] {} - primary: {:?}%, plan: {:?}",
         account_name, usage.primary_used_percent, usage.plan_type
+    );
+
+    Ok(usage)
+}
+
+async fn parse_claude_usage_response(
+    account: &StoredAccount,
+    oauth: ClaudeOauthCredentials,
+    response: reqwest::Response,
+) -> Result<UsageInfo> {
+    let status = response.status();
+    println!("[Usage] Claude response status: {status}");
+
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        println!("[Usage] Claude error response: {body}");
+        return Ok(UsageInfo::error(
+            account.id.clone(),
+            format!("Claude usage API error: {status}"),
+        ));
+    }
+
+    let body_text = response
+        .text()
+        .await
+        .context("Failed to read Claude usage response body")?;
+    println!(
+        "[Usage] Claude response body: {}",
+        &body_text[..body_text.len().min(200)]
+    );
+
+    let payload: Value =
+        serde_json::from_str(&body_text).context("Failed to parse Claude usage response")?;
+    let usage = convert_claude_payload_to_usage_info(account, oauth, &payload);
+    println!(
+        "[Usage] {} - Claude primary: {:?}%, plan: {:?}",
+        account.name, usage.primary_used_percent, usage.plan_type
     );
 
     Ok(usage)
@@ -314,8 +431,49 @@ fn extract_chatgpt_auth(account: &StoredAccount) -> Result<(&str, Option<&str>)>
             account_id,
             ..
         } => Ok((access_token.as_str(), account_id.as_deref())),
-        AuthData::ApiKey { .. } => anyhow::bail!("Account is not using ChatGPT OAuth"),
+        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => {
+            anyhow::bail!("Account is not using ChatGPT OAuth")
+        }
     }
+}
+
+fn extract_claude_auth(account: &StoredAccount) -> Result<ClaudeOauthCredentials> {
+    match &account.auth_data {
+        AuthData::ClaudeCode { credentials, .. } => {
+            find_claude_oauth_credentials(credentials).context("Claude OAuth credentials not found")
+        }
+        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {
+            anyhow::bail!("Account is not using Claude Code OAuth")
+        }
+    }
+}
+
+fn find_claude_oauth_credentials(
+    credentials: &[ClaudeCredential],
+) -> Option<ClaudeOauthCredentials> {
+    let mut fallback = None;
+
+    for credential in credentials {
+        let Ok(parsed) = serde_json::from_str::<ClaudeStoredCredential>(&credential.value) else {
+            continue;
+        };
+        let Some(oauth) = parsed.claude_ai_oauth else {
+            continue;
+        };
+        let is_primary_service = credential.service_name == "Claude Code-credentials";
+        let has_plan_metadata =
+            oauth.subscription_type.is_some() || oauth.rate_limit_tier.is_some();
+
+        if is_primary_service || has_plan_metadata {
+            return Some(oauth);
+        }
+
+        if fallback.is_none() {
+            fallback = Some(oauth);
+        }
+    }
+
+    fallback
 }
 
 async fn send_chatgpt_usage_request(
@@ -328,6 +486,32 @@ async fn send_chatgpt_usage_request(
         chatgpt_account_id,
     )
     .await
+}
+
+async fn send_claude_usage_request(access_token: &str) -> Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    let mut headers = HeaderMap::new();
+    let url = format!("{CLAUDE_API}/oauth/usage");
+
+    headers.insert(USER_AGENT, HeaderValue::from_static(CLAUDE_USER_AGENT));
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {access_token}")).context("Invalid access token")?,
+    );
+    headers.insert(
+        HeaderName::from_static("anthropic-beta"),
+        HeaderValue::from_static(CLAUDE_OAUTH_BETA),
+    );
+
+    println!("[Usage] Requesting Claude usage: {url}");
+
+    client
+        .get(&url)
+        .headers(headers)
+        .send()
+        .await
+        .with_context(|| format!("Failed to send Claude usage request to {url}"))
 }
 
 async fn send_chatgpt_get_request(
@@ -474,6 +658,218 @@ fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPaylo
         credits_balance: credits.and_then(|c| c.balance),
         error: None,
     }
+}
+
+fn convert_claude_payload_to_usage_info(
+    account: &StoredAccount,
+    oauth: ClaudeOauthCredentials,
+    payload: &Value,
+) -> UsageInfo {
+    let primary = extract_claude_limit(payload, "five_hour");
+    let secondary = extract_claude_limit(payload, "seven_day")
+        .or_else(|| extract_claude_limit(payload, "seven_day_sonnet"));
+    let credits_balance = extract_claude_credits(payload);
+    let extra_usage = payload.get("extra_usage");
+    let has_credits = credits_balance
+        .as_ref()
+        .map(|_| true)
+        .or_else(|| {
+            extra_usage
+                .and_then(|value| value.get("is_enabled"))
+                .and_then(Value::as_bool)
+        })
+        .or_else(|| extract_bool_field(payload, &["has_credits", "hasCredits"]));
+    let unlimited_credits = extra_usage
+        .and_then(|value| value.get("monthly_limit"))
+        .map(Value::is_null)
+        .or_else(|| extract_bool_field(payload, &["unlimited_credits", "unlimitedCredits"]));
+
+    UsageInfo {
+        account_id: account.id.clone(),
+        plan_type: oauth
+            .subscription_type
+            .or_else(|| account.plan_type.clone())
+            .or_else(|| Some("claude".to_string())),
+        primary_used_percent: primary.as_ref().map(|limit| limit.used_percent),
+        primary_window_minutes: primary.as_ref().map(|_| 5 * 60),
+        primary_resets_at: primary.as_ref().and_then(|limit| limit.resets_at),
+        secondary_used_percent: secondary.as_ref().map(|limit| limit.used_percent),
+        secondary_window_minutes: secondary.as_ref().map(|_| 7 * 24 * 60),
+        secondary_resets_at: secondary.as_ref().and_then(|limit| limit.resets_at),
+        has_credits,
+        unlimited_credits,
+        credits_balance,
+        error: None,
+    }
+}
+
+fn extract_claude_limit(payload: &Value, key: &str) -> Option<ClaudeUsageLimit> {
+    let value = payload.get(key)?;
+    let used_percent = extract_claude_used_percent(value)?;
+    let resets_at =
+        extract_timestamp_field(value, &["resets_at", "reset_at", "resetsAt", "resetAt"]);
+
+    Some(ClaudeUsageLimit {
+        used_percent,
+        resets_at,
+    })
+}
+
+fn extract_claude_used_percent(value: &Value) -> Option<f64> {
+    if let Some(remaining) = extract_number_field(
+        value,
+        &[
+            "remaining_percentage",
+            "remaining_percent",
+            "remainingPercentage",
+            "remainingPercent",
+        ],
+    ) {
+        return Some(100.0 - normalize_claude_percent(remaining));
+    }
+
+    extract_number_field(
+        value,
+        &[
+            "utilization",
+            "used_percentage",
+            "used_percent",
+            "usedPercentage",
+            "usedPercent",
+        ],
+    )
+    .map(normalize_claude_percent)
+}
+
+fn normalize_claude_percent(value: f64) -> f64 {
+    let percent = if value <= 1.0 { value * 100.0 } else { value };
+    if percent.is_finite() {
+        percent.max(0.0).min(100.0)
+    } else {
+        0.0
+    }
+}
+
+fn extract_claude_credits(payload: &Value) -> Option<String> {
+    for key in [
+        "credits_balance",
+        "creditsBalance",
+        "credit_balance",
+        "creditBalance",
+        "balance",
+        "remaining_credits",
+        "remainingCredits",
+    ] {
+        if let Some(text) = payload.get(key).and_then(value_to_display_string) {
+            return Some(text);
+        }
+    }
+
+    for key in ["credits", "creditBalance", "credit_balance"] {
+        if let Some(value) = payload.get(key) {
+            if let Some(text) = value_to_display_string(value) {
+                return Some(text);
+            }
+            if let Some(text) = extract_value_field(
+                value,
+                &[
+                    "credits_balance",
+                    "creditsBalance",
+                    "balance",
+                    "remaining_credits",
+                    "remainingCredits",
+                ],
+            )
+            .and_then(value_to_display_string)
+            {
+                return Some(text);
+            }
+        }
+    }
+
+    payload
+        .get("extra_usage")
+        .and_then(extract_claude_extra_usage_credits)
+}
+
+fn extract_claude_extra_usage_credits(extra_usage: &Value) -> Option<String> {
+    let used = extract_value_field(extra_usage, &["used_credits", "usedCredits"])
+        .and_then(value_to_display_string)?;
+    let limit = extract_value_field(extra_usage, &["monthly_limit", "monthlyLimit"])
+        .filter(|value| !value.is_null())
+        .and_then(value_to_display_string);
+
+    limit
+        .map(|limit| format!("{used} / {limit} spent"))
+        .or_else(|| Some(format!("{used} spent")))
+}
+
+fn extract_value_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    keys.iter().find_map(|key| value.get(*key))
+}
+
+fn extract_number_field(value: &Value, keys: &[&str]) -> Option<f64> {
+    extract_value_field(value, keys).and_then(value_to_f64)
+}
+
+fn extract_bool_field(value: &Value, keys: &[&str]) -> Option<bool> {
+    extract_value_field(value, keys).and_then(Value::as_bool)
+}
+
+fn extract_timestamp_field(value: &Value, keys: &[&str]) -> Option<i64> {
+    extract_value_field(value, keys).and_then(parse_claude_timestamp)
+}
+
+fn value_to_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => text.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn value_to_display_string(value: &Value) -> Option<String> {
+    match value {
+        Value::Number(number) => Some(number.to_string()),
+        Value::String(text) if !text.trim().is_empty() => Some(text.clone()),
+        _ => None,
+    }
+}
+
+fn parse_claude_timestamp(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(number) => number.as_f64().map(normalize_claude_timestamp),
+        Value::String(text) => {
+            if let Ok(timestamp) = text.parse::<f64>() {
+                return Some(normalize_claude_timestamp(timestamp));
+            }
+            DateTime::parse_from_rfc3339(text)
+                .ok()
+                .map(|timestamp| timestamp.timestamp())
+        }
+        _ => None,
+    }
+}
+
+fn normalize_claude_timestamp(timestamp: f64) -> i64 {
+    let seconds = if timestamp > 1_000_000_000_000.0 {
+        timestamp / 1000.0
+    } else {
+        timestamp
+    };
+    seconds.round() as i64
+}
+
+fn format_claude_auth_error(error: &str) -> String {
+    if error.contains("invalid_grant") {
+        return "Claude refresh token is no longer valid. Open Claude Code and sign in again, then import the current Claude account again.".to_string();
+    }
+
+    if error.contains("Unauthorized") || error.contains("401") {
+        return "Claude login expired. Open Claude Code and sign in again, then import the current Claude account again.".to_string();
+    }
+
+    error.to_string()
 }
 
 fn extract_rate_limits(
