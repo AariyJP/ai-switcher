@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { isTauriRuntime } from "../lib/platform";
 import { cn } from "@/lib/utils";
+
+const segoeGlyphStyle: React.CSSProperties = {
+  fontFamily: '"Segoe Fluent Icons", "Segoe MDL2 Assets"',
+  fontSize: "10px",
+  lineHeight: 1,
+};
 
 const appWindow = getCurrentWindow();
 const isMacOs =
@@ -56,21 +61,21 @@ export function TitleBar() {
     <div
       onMouseDown={handleDrag}
       onDoubleClick={handleDoubleClick}
-      className="bg-background flex h-14 items-center px-3 select-none"
+      className="bg-background flex h-14 items-stretch select-none pl-3"
     >
-      <div className={cn("h-full flex-1", isMacOs ? "ml-22 mr-2" : "mr-3")} />
+      <div className={cn("flex-1", isMacOs && "ml-22 mr-2")} />
       {!isMacOs && (
-        <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="flex" onMouseDown={(e) => e.stopPropagation()}>
           <Button
             variant="ghost"
             size="icon"
             onClick={() => {
               void appWindow.minimize();
             }}
-            className="size-8"
+            className="h-full w-[46px] rounded-none"
             title="Minimize"
           >
-            <Minus className="size-4" />
+            <span style={segoeGlyphStyle} aria-hidden>{"\u{E921}"}</span>
           </Button>
           <Button
             variant="ghost"
@@ -78,10 +83,12 @@ export function TitleBar() {
             onClick={() => {
               void appWindow.toggleMaximize();
             }}
-            className="size-8"
+            className="h-full w-[46px] rounded-none"
             title={isMaximized ? "Restore" : "Maximize"}
           >
-            <Square className="size-4" />
+            <span style={segoeGlyphStyle} aria-hidden>
+              {isMaximized ? "\u{E923}" : "\u{E922}"}
+            </span>
           </Button>
           <Button
             variant="ghost"
@@ -89,10 +96,10 @@ export function TitleBar() {
             onClick={() => {
               void appWindow.close();
             }}
-            className="hover:bg-destructive hover:text-destructive-foreground size-8"
+            className="h-full w-[46px] rounded-none hover:bg-destructive hover:text-destructive-foreground"
             title="Close"
           >
-            <X className="size-4" />
+            <span style={segoeGlyphStyle} aria-hidden>{"\u{E8BB}"}</span>
           </Button>
         </div>
       )}
