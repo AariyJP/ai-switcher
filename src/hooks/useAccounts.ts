@@ -304,12 +304,14 @@ export function useAccounts(tool: ToolKind = "codex") {
         }
 
         await invokeBackend<AccountInfo>("add_claude_account_from_current", { name });
-        await loadAccounts();
+        const accountList = await loadAccounts();
+        fetchedToolsRef.current.add(tool);
+        await refreshUsage(accountList);
       } catch (err) {
         throw err;
       }
     },
-    [loadAccounts, tool]
+    [loadAccounts, refreshUsage, tool]
   );
 
   const startOAuthLogin = useCallback(async (accountName: string) => {
