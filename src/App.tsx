@@ -16,7 +16,7 @@ import {
 import { toast, Toaster } from "sonner";
 import { useAccounts } from "./hooks/useAccounts";
 import { AccountCard, AddAccountModal, TitleBar, UpdateChecker } from "./components";
-import type { CodexProcessInfo } from "./types";
+import type { ProcessInfo, ToolKind } from "./types";
 import {
   exportFullBackupFile,
   importFullBackupFile,
@@ -64,6 +64,17 @@ type SortKey =
   | "subscription_desc";
 
 function App() {
+  const [activeTool, setActiveTool] = useState<ActiveTool>(() => {
+    if (typeof window === "undefined") return "codex";
+    try {
+      const saved = window.localStorage.getItem(ACTIVE_TOOL_STORAGE_KEY);
+      if (saved === "codex" || saved === "claude") return saved;
+      return "codex";
+    } catch {
+      return "codex";
+    }
+  });
+
   const {
     accounts,
     loading,
@@ -77,6 +88,7 @@ function App() {
     deleteAccount,
     renameAccount,
     importFromFile,
+    addClaudeFromCurrent,
     exportAccountsSlimText,
     importAccountsSlimText,
     startOAuthLogin,
@@ -84,7 +96,7 @@ function App() {
     cancelOAuthLogin,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
-  } = useAccounts();
+  } = useAccounts(activeTool);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
@@ -96,7 +108,9 @@ function App() {
   const [configCopied, setConfigCopied] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [processInfo, setProcessInfo] = useState<CodexProcessInfo | null>(null);
+  const [processInfoByTool, setProcessInfoByTool] = useState<
+    Record<ToolKind, ProcessInfo | null>
+  >({ codex: null, claude: null });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExportingSlim, setIsExportingSlim] = useState(false);
   const [isImportingSlim, setIsImportingSlim] = useState(false);
@@ -116,17 +130,6 @@ function App() {
       return "system";
     }
   });
-  const [activeTool, setActiveTool] = useState<ActiveTool>(() => {
-    if (typeof window === "undefined") return "codex";
-    try {
-      const saved = window.localStorage.getItem(ACTIVE_TOOL_STORAGE_KEY);
-      if (saved === "codex" || saved === "claude") return saved;
-      return "codex";
-    } catch {
-      return "codex";
-    }
-  });
-
   useEffect(() => {
     try {
       window.localStorage.setItem(ACTIVE_TOOL_STORAGE_KEY, activeTool);
@@ -163,22 +166,26 @@ function App() {
   };
 
   const checkProcesses = useCallback(async () => {
+    const sameInfo = (a: ProcessInfo | null, b: ProcessInfo) =>
+      !!a &&
+      a.can_switch === b.can_switch &&
+      a.count === b.count &&
+      a.background_count === b.background_count &&
+      a.pids.length === b.pids.length &&
+      a.pids.every((pid, index) => pid === b.pids[index]);
+
     try {
-      const info = await invokeBackend<CodexProcessInfo>("check_codex_processes");
-      setProcessInfo((prev) => {
-        if (
-          prev &&
-          prev.can_switch === info.can_switch &&
-          prev.count === info.count &&
-          prev.background_count === info.background_count &&
-          prev.pids.length === info.pids.length &&
-          prev.pids.every((pid, index) => pid === info.pids[index])
-        ) {
+      const [codex, claude] = await Promise.all([
+        invokeBackend<ProcessInfo>("check_processes", { tool: "codex" }),
+        invokeBackend<ProcessInfo>("check_processes", { tool: "claude" }),
+      ]);
+      setProcessInfoByTool((prev) => {
+        if (sameInfo(prev.codex, codex) && sameInfo(prev.claude, claude)) {
           return prev;
         }
-        return info;
+        return { codex, claude };
       });
-      return info;
+      return { codex, claude };
     } catch (err) {
       console.error("Failed to check processes:", err);
       return null;
@@ -221,8 +228,8 @@ function App() {
   }, [themeMode]);
 
   const handleSwitch = async (accountId: string) => {
-    const latestProcessInfo = await checkProcesses();
-    if (latestProcessInfo && !latestProcessInfo.can_switch) {
+    const latest = await checkProcesses();
+    if (latest && !latest[activeTool].can_switch) {
       return;
     }
 
@@ -405,9 +412,22 @@ function App() {
 
   const activeAccount = accounts.find((a) => a.is_active);
   const otherAccounts = accounts.filter((a) => !a.is_active);
-  const hasRunningProcesses = !!processInfo && processInfo.count > 0;
+  const codexProcessInfo = processInfoByTool.codex;
+  const claudeProcessInfo = processInfoByTool.claude;
+  const hasRunningCodex = !!codexProcessInfo && codexProcessInfo.count > 0;
+  const hasRunningClaude = !!claudeProcessInfo && claudeProcessInfo.count > 0;
+  const usageEnabled = true;
+  const warmupEnabled = activeTool === "codex";
+  const hasRunningActiveTool = activeTool === "codex" ? hasRunningCodex : hasRunningClaude;
+  const switchDisabledLabel = activeTool === "codex" ? "Codex Running" : "Claude Running";
+  const switchDisabledTooltip =
+    activeTool === "codex" ? "Close all Codex processes first" : "Close all Claude processes first";
 
   const sortedOtherAccounts = useMemo(() => {
+    if (activeTool === "claude") {
+      return [...otherAccounts].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     const getResetDeadline = (resetAt: number | null | undefined) =>
       resetAt ?? Number.POSITIVE_INFINITY;
 
@@ -489,7 +509,7 @@ function App() {
       if (deadlineDiff !== 0) return deadlineDiff;
       return a.name.localeCompare(b.name);
     });
-  }, [otherAccounts, otherAccountsSort]);
+  }, [activeTool, otherAccounts, otherAccountsSort]);
 
   const themeIcon =
     themeMode === "system" ? Monitor : themeMode === "light" ? Sun : Moon;
@@ -518,11 +538,11 @@ function App() {
                   <h1 className="text-foreground text-xl font-bold tracking-tight">
                     AI Switcher
                   </h1>
-                  {processInfo && (
+                  {codexProcessInfo && (
                     <Badge
                       variant="outline"
                       className={cn(
-                        hasRunningProcesses
+                        hasRunningCodex
                           ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
                           : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
                       )}
@@ -530,12 +550,28 @@ function App() {
                       <span
                         className={cn(
                           "inline-block size-1.5 rounded-full",
-                          hasRunningProcesses ? "bg-amber-500" : "bg-emerald-500"
+                          hasRunningCodex ? "bg-amber-500" : "bg-emerald-500"
                         )}
                       />
-                      {hasRunningProcesses
-                        ? `${processInfo.count} Codex running`
-                        : "0 Codex running"}
+                      {codexProcessInfo.count} Codex running
+                    </Badge>
+                  )}
+                  {claudeProcessInfo && (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        hasRunningClaude
+                          ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                          : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "inline-block size-1.5 rounded-full",
+                          hasRunningClaude ? "bg-amber-500" : "bg-emerald-500"
+                        )}
+                      />
+                      {claudeProcessInfo.count} Claude running
                     </Badge>
                   )}
                 </div>
@@ -570,19 +606,21 @@ function App() {
                   {isRefreshing ? "Refreshing all usage" : "Refresh all usage"}
                 </TooltipContent>
               </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={handleWarmupAll}
-                    disabled={isWarmingAll || accounts.length === 0}
-                  >
-                    <Zap className={cn("size-4", isWarmingAll && "animate-pulse")} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Send minimal traffic using all accounts</TooltipContent>
-              </Tooltip>
+              {warmupEnabled && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={handleWarmupAll}
+                      disabled={isWarmingAll || accounts.length === 0}
+                    >
+                      <Zap className={cn("size-4", isWarmingAll && "animate-pulse")} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Send minimal traffic using all accounts</TooltipContent>
+                </Tooltip>
+              )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="outline" size="icon" onClick={cycleTheme}>
@@ -646,7 +684,7 @@ function App() {
           onValueChange={(v) => setActiveTool(v as ActiveTool)}
         >
           <div className="mx-auto max-w-5xl px-6">
-            <TabsList className="bg-transparent p-0">
+            <TabsList variant="line" className="flex w-full">
               <TabsTrigger value="codex">Codex</TabsTrigger>
               <TabsTrigger value="claude">Claude</TabsTrigger>
             </TabsList>
@@ -655,28 +693,7 @@ function App() {
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-8">
-        {activeTool === "claude" ? (
-          <div className="py-20 text-center">
-            <div className="bg-muted mx-auto mb-4 flex size-16 items-center justify-center rounded-2xl">
-              <Bot className="text-muted-foreground size-8" />
-            </div>
-            <h2 className="text-foreground mb-2 text-xl font-semibold">
-              Claude support is coming
-            </h2>
-            <p className="text-muted-foreground text-sm">
-              Tracking in{" "}
-              <a
-                href="https://github.com/AariyJP/ac-switcher/issues/1"
-                target="_blank"
-                rel="noreferrer"
-                className="hover:text-foreground underline"
-              >
-                ac-switcher#1
-              </a>
-              .
-            </p>
-          </div>
-        ) : loading && accounts.length === 0 ? (
+        {loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="text-foreground mb-4 size-10 animate-spin" />
             <p className="text-muted-foreground">Loading accounts...</p>
@@ -689,11 +706,15 @@ function App() {
         ) : accounts.length === 0 ? (
           <div className="py-20 text-center">
             <div className="bg-muted mx-auto mb-4 flex size-16 items-center justify-center rounded-2xl">
-              <User className="text-muted-foreground size-8" />
+              {activeTool === "claude" ? (
+                <Bot className="text-muted-foreground size-8" />
+              ) : (
+                <User className="text-muted-foreground size-8" />
+              )}
             </div>
             <h2 className="text-foreground mb-2 text-xl font-semibold">No accounts yet</h2>
             <p className="text-muted-foreground mb-6">
-              Add your first Codex account to get started
+              Add your first {activeTool === "claude" ? "Claude" : "Codex"} account to get started
             </p>
             <Button onClick={() => setIsAddModalOpen(true)}>Add Account</Button>
           </div>
@@ -716,9 +737,13 @@ function App() {
                   }
                   onRename={(newName) => renameAccount(activeAccount.id, newName)}
                   switching={switchingId === activeAccount.id}
-                  switchDisabled={hasRunningProcesses}
+                  switchDisabled={hasRunningActiveTool}
+                  switchDisabledLabel={switchDisabledLabel}
+                  switchDisabledTooltip={switchDisabledTooltip}
                   warmingUp={isWarmingAll || warmingUpId === activeAccount.id}
                   masked={maskedAccounts.has(activeAccount.id)}
+                  usageEnabled={usageEnabled}
+                  warmupEnabled={warmupEnabled}
                   onToggleMask={() => toggleMask(activeAccount.id)}
                 />
               </section>
@@ -730,37 +755,39 @@ function App() {
                   <h2 className="text-muted-foreground text-sm font-medium uppercase tracking-wider">
                     Other Accounts ({otherAccounts.length})
                   </h2>
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground text-xs">Sort</span>
-                    <Select
-                      value={otherAccountsSort}
-                      onValueChange={(v) => setOtherAccountsSort(v as SortKey)}
-                    >
-                      <SelectTrigger size="sm" className="w-auto">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent align="end">
-                        <SelectItem value="deadline_asc">
-                          Reset: earliest to latest
-                        </SelectItem>
-                        <SelectItem value="deadline_desc">
-                          Reset: latest to earliest
-                        </SelectItem>
-                        <SelectItem value="remaining_desc">
-                          % remaining: highest to lowest
-                        </SelectItem>
-                        <SelectItem value="remaining_asc">
-                          % remaining: lowest to highest
-                        </SelectItem>
-                        <SelectItem value="subscription_asc">
-                          Expiry: earliest to latest
-                        </SelectItem>
-                        <SelectItem value="subscription_desc">
-                          Expiry: latest to earliest
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {activeTool === "codex" && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground text-xs">Sort</span>
+                      <Select
+                        value={otherAccountsSort}
+                        onValueChange={(v) => setOtherAccountsSort(v as SortKey)}
+                      >
+                        <SelectTrigger size="sm" className="w-auto">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent align="end">
+                          <SelectItem value="deadline_asc">
+                            Reset: earliest to latest
+                          </SelectItem>
+                          <SelectItem value="deadline_desc">
+                            Reset: latest to earliest
+                          </SelectItem>
+                          <SelectItem value="remaining_desc">
+                            % remaining: highest to lowest
+                          </SelectItem>
+                          <SelectItem value="remaining_asc">
+                            % remaining: lowest to highest
+                          </SelectItem>
+                          <SelectItem value="subscription_asc">
+                            Expiry: earliest to latest
+                          </SelectItem>
+                          <SelectItem value="subscription_desc">
+                            Expiry: latest to earliest
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   {sortedOtherAccounts.map((account) => (
@@ -775,9 +802,13 @@ function App() {
                       }
                       onRename={(newName) => renameAccount(account.id, newName)}
                       switching={switchingId === account.id}
-                      switchDisabled={hasRunningProcesses}
+                      switchDisabled={hasRunningActiveTool}
+                      switchDisabledLabel={switchDisabledLabel}
+                      switchDisabledTooltip={switchDisabledTooltip}
                       warmingUp={isWarmingAll || warmingUpId === account.id}
                       masked={maskedAccounts.has(account.id)}
+                      usageEnabled={usageEnabled}
+                      warmupEnabled={warmupEnabled}
                       onToggleMask={() => toggleMask(account.id)}
                     />
                   ))}
@@ -790,8 +821,10 @@ function App() {
 
       <AddAccountModal
         isOpen={isAddModalOpen}
+        tool={activeTool}
         onClose={() => setIsAddModalOpen(false)}
         onImportFile={importFromFile}
+        onAddClaudeFromCurrent={addClaudeFromCurrent}
         onStartOAuth={startOAuthLogin}
         onCompleteOAuth={completeOAuthLogin}
         onCancelOAuth={cancelOAuthLogin}

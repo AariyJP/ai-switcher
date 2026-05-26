@@ -17,11 +17,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { ToolKind } from "../types";
 
 interface AddAccountModalProps {
   isOpen: boolean;
+  tool: ToolKind;
   onClose: () => void;
   onImportFile: (source: FileSource, name: string) => Promise<void>;
+  onAddClaudeFromCurrent: (name: string) => Promise<void>;
   onStartOAuth: (name: string) => Promise<{ auth_url: string }>;
   onCompleteOAuth: () => Promise<unknown>;
   onCancelOAuth: () => Promise<void>;
@@ -31,8 +34,10 @@ type Tab = "oauth" | "import";
 
 export function AddAccountModal({
   isOpen,
+  tool,
   onClose,
   onImportFile,
+  onAddClaudeFromCurrent,
   onStartOAuth,
   onCompleteOAuth,
   onCancelOAuth,
@@ -45,7 +50,7 @@ export function AddAccountModal({
   const [oauthPending, setOauthPending] = useState(false);
   const [authUrl, setAuthUrl] = useState<string>("");
   const [copied, setCopied] = useState<boolean>(false);
-  const isPrimaryDisabled = loading || (activeTab === "oauth" && oauthPending);
+  const isPrimaryDisabled = loading || (tool === "codex" && activeTab === "oauth" && oauthPending);
   const tauriRuntime = isTauriRuntime();
 
   const resetForm = () => {
@@ -118,6 +123,23 @@ export function AddAccountModal({
     }
   };
 
+  const handleAddClaude = async () => {
+    if (!name.trim()) {
+      setError("Please enter an account name");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+      await onAddClaudeFromCurrent(name.trim());
+      handleClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setLoading(false);
+    }
+  };
+
   return (
     <Dialog
       open={isOpen}
@@ -127,30 +149,10 @@ export function AddAccountModal({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add Account</DialogTitle>
+          <DialogTitle>Add {tool === "claude" ? "Claude" : "Codex"} Account</DialogTitle>
         </DialogHeader>
 
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) => {
-            const tab = value as Tab;
-            if (tab === "import" && oauthPending) {
-              void onCancelOAuth().catch((err) => {
-                console.error("Failed to cancel login:", err);
-              });
-              setOauthPending(false);
-              setLoading(false);
-            }
-            setActiveTab(tab);
-            setError(null);
-          }}
-          className="w-full"
-        >
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="oauth">ChatGPT Login</TabsTrigger>
-            <TabsTrigger value="import">Import File</TabsTrigger>
-          </TabsList>
-
+        {tool === "claude" ? (
           <div className="space-y-4 pt-2">
             <div className="space-y-2">
               <label className="text-sm font-medium">Account Name</label>
@@ -161,6 +163,47 @@ export function AddAccountModal({
                 placeholder="e.g., Work Account"
               />
             </div>
+            <p className="text-muted-foreground text-sm">
+              Import the Claude Code login currently stored on this Mac.
+            </p>
+            {error && (
+              <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
+                {error}
+              </div>
+            )}
+          </div>
+        ) : (
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => {
+              const tab = value as Tab;
+              if (tab === "import" && oauthPending) {
+                void onCancelOAuth().catch((err) => {
+                  console.error("Failed to cancel login:", err);
+                });
+                setOauthPending(false);
+                setLoading(false);
+              }
+              setActiveTab(tab);
+              setError(null);
+            }}
+            className="w-full"
+          >
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="oauth">ChatGPT Login</TabsTrigger>
+              <TabsTrigger value="import">Import File</TabsTrigger>
+            </TabsList>
+
+            <div className="space-y-4 pt-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Account Name</label>
+                <Input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g., Work Account"
+                />
+              </div>
 
             <TabsContent value="oauth" className="m-0">
               <div className="text-muted-foreground text-sm">
@@ -246,22 +289,31 @@ export function AddAccountModal({
               </div>
             )}
           </div>
-        </Tabs>
+          </Tabs>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={handleClose} className="flex-1">
             Cancel
           </Button>
           <Button
-            onClick={activeTab === "oauth" ? handleOAuthLogin : handleImportFile}
+            onClick={
+              tool === "claude"
+                ? handleAddClaude
+                : activeTab === "oauth"
+                  ? handleOAuthLogin
+                  : handleImportFile
+            }
             disabled={isPrimaryDisabled}
             className="flex-1"
           >
             {loading
               ? "Adding..."
-              : activeTab === "oauth"
-                ? "Generate Login Link"
-                : "Import"}
+              : tool === "claude"
+                ? "Import Current Login"
+                : activeTab === "oauth"
+                  ? "Generate Login Link"
+                  : "Import"}
           </Button>
         </DialogFooter>
       </DialogContent>

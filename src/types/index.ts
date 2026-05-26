@@ -1,6 +1,8 @@
 // Types matching the Rust backend
 
-export type AuthMode = "api_key" | "chat_g_p_t";
+export type ToolKind = "codex" | "claude";
+
+export type AuthMode = "api_key" | "chat_g_p_t" | "claude_code";
 
 export interface AccountInfo {
   id: string;
@@ -8,6 +10,7 @@ export interface AccountInfo {
   email: string | null;
   plan_type: string | null;
   subscription_expires_at: string | null;
+  tool: ToolKind;
   auth_mode: AuthMode;
   is_active: boolean;
   created_at: string;
@@ -39,7 +42,7 @@ export interface AccountWithUsage extends AccountInfo {
   usageLoading?: boolean;
 }
 
-export interface CodexProcessInfo {
+export interface ProcessInfo {
   count: number;
   background_count: number;
   can_switch: boolean;
