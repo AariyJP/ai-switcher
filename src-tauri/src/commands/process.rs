@@ -32,12 +32,16 @@ struct WindowsToolProcess {
 #[derive(Debug, Clone, Copy)]
 struct ToolPatterns {
     /// CLI command token; matched against first whitespace-separated token or its '/'-suffix
+    #[cfg_attr(not(unix), allow(dead_code))]
     cli_token: &'static str,
     /// Substring identifying the desktop app binary (case sensitive within the path)
+    #[cfg_attr(not(unix), allow(dead_code))]
     desktop_macos_marker: &'static str,
     /// Substrings whose presence excludes a desktop-marker match (helper apps, menubar)
+    #[cfg_attr(not(unix), allow(dead_code))]
     desktop_macos_excludes: &'static [&'static str],
     /// Substrings (lowercased) identifying background helpers that should be counted as bg
+    #[cfg_attr(not(unix), allow(dead_code))]
     bg_helper_markers: &'static [&'static str],
     /// Substrings (lowercased) identifying IDE plugin processes to ignore
     ide_plugin_markers: &'static [&'static str],
