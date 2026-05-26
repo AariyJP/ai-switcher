@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import { useAccounts } from "./hooks/useAccounts";
-import { AccountCard, AddAccountModal, TitleBar, UpdateChecker } from "./components";
+import { AccountCard, AddAccountModal, TitleBar } from "./components";
 import type { ProcessInfo, ToolKind } from "./types";
 import {
   exportFullBackupFile,
@@ -908,7 +908,6 @@ function App() {
         </DialogContent>
       </Dialog>
 
-      <UpdateChecker />
       <Toaster richColors position="bottom-center" />
     </div>
   );
