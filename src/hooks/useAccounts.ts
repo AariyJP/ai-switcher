@@ -415,6 +415,7 @@ export function useAccounts(tool: ToolKind = "codex") {
   }, []);
 
   useEffect(() => {
+    setAccounts([]);
     loadAccounts().then((accountList) => {
       if (fetchedToolsRef.current.has(tool)) {
         return;
