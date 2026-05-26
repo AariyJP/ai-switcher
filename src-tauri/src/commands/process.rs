@@ -84,7 +84,7 @@ impl ToolKind {
                 self_marker: "codex-switcher",
                 windows_exe_lc: "claude.exe",
                 windows_app_server_marker: None,
-                windows_bundled_cli_marker: Some("appdata\\local\\anthropicclaude"),
+                windows_bundled_cli_marker: None,
             },
         }
     }
