@@ -8,10 +8,10 @@ use chrono::{DateTime, Utc};
 
 use crate::types::{AccountsStore, AuthData, ClaudeCredential, StoredAccount};
 
-/// Get the path to the codex-switcher config directory
+/// Get the path to the ai-switcher config directory
 pub fn get_config_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not find home directory")?;
-    Ok(home.join(".codex-switcher"))
+    Ok(home.join(".ai-switcher"))
 }
 
 /// Get the path to accounts.json

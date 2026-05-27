@@ -186,6 +186,12 @@ fn read_current_claude_credentials() -> Result<Vec<ClaudeCredential>> {
 
 #[cfg(target_os = "windows")]
 fn claude_credentials_path() -> Result<std::path::PathBuf> {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        if !dir.as_os_str().is_empty() {
+            return Ok(dir.join(".credentials.json"));
+        }
+    }
     let home = dirs::home_dir().context("Could not find home directory")?;
     Ok(home.join(".claude").join(".credentials.json"))
 }
