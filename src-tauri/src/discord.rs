@@ -29,7 +29,6 @@ pub fn start_discord_presence() {
 fn set_activity(client: &mut DiscordIpcClient) -> Result<(), discord_rich_presence::error::Error> {
     client.set_activity(
         Activity::new()
-            .name("AI Switcher")
-            .activity_type(ActivityType::Playing),
+        .activity_type(ActivityType::Playing)
     )
 }
