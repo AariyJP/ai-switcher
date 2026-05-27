@@ -17,14 +17,16 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { ToolKind } from "../types";
+import type { ActiveTool } from "../types";
 
 interface AddAccountModalProps {
   isOpen: boolean;
-  tool: ToolKind;
+  activeTool: ActiveTool;
   onClose: () => void;
   onImportFile: (source: FileSource, name: string) => Promise<void>;
   onAddClaudeFromCurrent: (name: string) => Promise<void>;
+  onAddClaudeDesktopFromCurrent: (name: string) => Promise<void>;
+  claudeDesktopImportBlocked?: boolean;
   onStartOAuth: (name: string) => Promise<{ auth_url: string }>;
   onCompleteOAuth: () => Promise<unknown>;
   onCancelOAuth: () => Promise<void>;
@@ -34,14 +36,16 @@ interface AddAccountModalProps {
 }
 
 type CodexTab = "oauth" | "import";
-type ClaudeTab = "oauth" | "import_current";
+type ClaudeCodeTab = "oauth" | "import_current";
 
 export function AddAccountModal({
   isOpen,
-  tool,
+  activeTool,
   onClose,
   onImportFile,
   onAddClaudeFromCurrent,
+  onAddClaudeDesktopFromCurrent,
+  claudeDesktopImportBlocked = false,
   onStartOAuth,
   onCompleteOAuth,
   onCancelOAuth,
@@ -50,7 +54,7 @@ export function AddAccountModal({
   onCancelClaudeOAuth,
 }: AddAccountModalProps) {
   const [codexTab, setCodexTab] = useState<CodexTab>("oauth");
-  const [claudeTab, setClaudeTab] = useState<ClaudeTab>("oauth");
+  const [claudeCodeTab, setClaudeCodeTab] = useState<ClaudeCodeTab>("oauth");
   const [name, setName] = useState("");
   const [fileSource, setFileSource] = useState<FileSource | null>(null);
   const [loading, setLoading] = useState(false);
@@ -60,10 +64,14 @@ export function AddAccountModal({
   const [copied, setCopied] = useState<boolean>(false);
   const tauriRuntime = isTauriRuntime();
 
-  const isCodexOAuthMode = tool === "codex" && codexTab === "oauth";
-  const isClaudeOAuthMode = tool === "claude" && claudeTab === "oauth";
-  const isOAuthMode = isCodexOAuthMode || isClaudeOAuthMode;
-  const isPrimaryDisabled = loading || (isOAuthMode && oauthPending);
+  const isCodexOAuthMode = activeTool === "codex" && codexTab === "oauth";
+  const isClaudeCodeOAuthMode =
+    activeTool === "claude_code" && claudeCodeTab === "oauth";
+  const isOAuthMode = isCodexOAuthMode || isClaudeCodeOAuthMode;
+  const isClaudeDesktopImportBlocked =
+    activeTool === "claude_desktop" && claudeDesktopImportBlocked;
+  const isPrimaryDisabled =
+    loading || (isOAuthMode && oauthPending) || isClaudeDesktopImportBlocked;
 
   const resetForm = () => {
     setName("");
@@ -77,9 +85,9 @@ export function AddAccountModal({
   const cancelActiveOAuthIfNeeded = async () => {
     if (!oauthPending) return;
     try {
-      if (tool === "claude") {
+      if (activeTool === "claude_code") {
         await onCancelClaudeOAuth();
-      } else {
+      } else if (activeTool === "codex") {
         await onCancelOAuth();
       }
     } catch (err) {
@@ -102,8 +110,10 @@ export function AddAccountModal({
     try {
       setLoading(true);
       setError(null);
-      const starter = tool === "claude" ? onStartClaudeOAuth : onStartOAuth;
-      const completer = tool === "claude" ? onCompleteClaudeOAuth : onCompleteOAuth;
+      const starter =
+        activeTool === "claude_code" ? onStartClaudeOAuth : onStartOAuth;
+      const completer =
+        activeTool === "claude_code" ? onCompleteClaudeOAuth : onCompleteOAuth;
       const info = await starter(name.trim());
       setAuthUrl(info.auth_url);
       setOauthPending(true);
@@ -148,7 +158,7 @@ export function AddAccountModal({
     }
   };
 
-  const handleAddClaude = async () => {
+  const handleAddClaudeCode = async () => {
     if (!name.trim()) {
       setError("Please enter an account name");
       return;
@@ -158,6 +168,27 @@ export function AddAccountModal({
       setLoading(true);
       setError(null);
       await onAddClaudeFromCurrent(name.trim());
+      handleClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setLoading(false);
+    }
+  };
+
+  const handleAddClaudeDesktop = async () => {
+    if (!name.trim()) {
+      setError("Please enter an account name");
+      return;
+    }
+    if (isClaudeDesktopImportBlocked) {
+      setError("Close Claude Desktop before importing this account.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+      await onAddClaudeDesktopFromCurrent(name.trim());
       handleClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -226,21 +257,54 @@ export function AddAccountModal({
     </div>
   );
 
-  const primaryAction = isClaudeOAuthMode
-    ? handleOAuthLogin
-    : tool === "claude"
-      ? handleAddClaude
-      : isCodexOAuthMode
+  const renderNameInput = () => (
+    <div className="space-y-2">
+      <label className="text-sm font-medium">Account Name</label>
+      <Input
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="e.g., Work Account"
+      />
+    </div>
+  );
+
+  const renderError = () =>
+    error && (
+      <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
+        {error}
+      </div>
+    );
+
+  const primaryAction =
+    activeTool === "codex"
+      ? isCodexOAuthMode
         ? handleOAuthLogin
-        : handleImportFile;
+        : handleImportFile
+      : activeTool === "claude_code"
+        ? isClaudeCodeOAuthMode
+          ? handleOAuthLogin
+          : handleAddClaudeCode
+        : handleAddClaudeDesktop;
 
   const primaryLabel = loading
     ? "Adding..."
-    : isOAuthMode
-      ? "Generate Login Link"
-      : tool === "claude"
-        ? "Import Current Login"
-        : "Import";
+    : activeTool === "codex"
+      ? isCodexOAuthMode
+        ? "Generate Login Link"
+        : "Import"
+      : activeTool === "claude_code"
+        ? isClaudeCodeOAuthMode
+          ? "Generate Login Link"
+          : "Import Current Login"
+        : "Import from Claude Desktop";
+
+  const dialogTitle =
+    activeTool === "codex"
+      ? "Add Codex Account"
+      : activeTool === "claude_code"
+        ? "Add Claude Code Account"
+        : "Add Claude Desktop Account";
 
   return (
     <Dialog
@@ -251,60 +315,10 @@ export function AddAccountModal({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add {tool === "claude" ? "Claude" : "Codex"} Account</DialogTitle>
+          <DialogTitle>{dialogTitle}</DialogTitle>
         </DialogHeader>
 
-        {tool === "claude" ? (
-          <Tabs
-            value={claudeTab}
-            onValueChange={(value) => {
-              const next = value as ClaudeTab;
-              if (next !== "oauth" && oauthPending) {
-                void onCancelClaudeOAuth().catch((err) => {
-                  console.error("Failed to cancel Claude login:", err);
-                });
-                setOauthPending(false);
-                setLoading(false);
-              }
-              setClaudeTab(next);
-              setError(null);
-            }}
-            className="w-full"
-          >
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="oauth">Claude Login</TabsTrigger>
-              <TabsTrigger value="import_current">Import Current Login</TabsTrigger>
-            </TabsList>
-
-            <div className="space-y-4 pt-2">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Account Name</label>
-                <Input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g., Work Account"
-                />
-              </div>
-
-              <TabsContent value="oauth" className="m-0">
-                {renderOAuthTab()}
-              </TabsContent>
-
-              <TabsContent value="import_current" className="m-0">
-                <p className="text-muted-foreground text-sm">
-                  Import the Claude Code login currently stored on this device.
-                </p>
-              </TabsContent>
-
-              {error && (
-                <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
-                  {error}
-                </div>
-              )}
-            </div>
-          </Tabs>
-        ) : (
+        {activeTool === "codex" ? (
           <Tabs
             value={codexTab}
             onValueChange={(value) => {
@@ -327,44 +341,86 @@ export function AddAccountModal({
             </TabsList>
 
             <div className="space-y-4 pt-2">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Account Name</label>
-                <Input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g., Work Account"
-                />
-              </div>
+              {renderNameInput()}
 
-            <TabsContent value="oauth" className="m-0">
-              {renderOAuthTab()}
-            </TabsContent>
+              <TabsContent value="oauth" className="m-0">
+                {renderOAuthTab()}
+              </TabsContent>
 
-            <TabsContent value="import" className="m-0">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Select auth.json file</label>
-                <div className="flex gap-2">
-                  <div className="bg-muted border-input text-muted-foreground flex-1 truncate rounded-md border px-3 py-2 text-sm">
-                    {describeFileSource(fileSource)}
+              <TabsContent value="import" className="m-0">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Select auth.json file</label>
+                  <div className="flex gap-2">
+                    <div className="bg-muted border-input text-muted-foreground flex-1 truncate rounded-md border px-3 py-2 text-sm">
+                      {describeFileSource(fileSource)}
+                    </div>
+                    <Button variant="outline" onClick={handleSelectFile}>
+                      Browse...
+                    </Button>
                   </div>
-                  <Button variant="outline" onClick={handleSelectFile}>
-                    Browse...
-                  </Button>
+                  <p className="text-muted-foreground text-xs">
+                    Import credentials from an existing Codex auth.json file
+                  </p>
                 </div>
-                <p className="text-muted-foreground text-xs">
-                  Import credentials from an existing Codex auth.json file
-                </p>
-              </div>
-            </TabsContent>
+              </TabsContent>
 
-            {error && (
-              <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
-                {error}
-              </div>
-            )}
-          </div>
+              {renderError()}
+            </div>
           </Tabs>
+        ) : activeTool === "claude_code" ? (
+          <Tabs
+            value={claudeCodeTab}
+            onValueChange={(value) => {
+              const next = value as ClaudeCodeTab;
+              if (next !== "oauth" && oauthPending) {
+                void onCancelClaudeOAuth().catch((err) => {
+                  console.error("Failed to cancel Claude login:", err);
+                });
+                setOauthPending(false);
+                setLoading(false);
+              }
+              setClaudeCodeTab(next);
+              setError(null);
+            }}
+            className="w-full"
+          >
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="oauth">Claude Login</TabsTrigger>
+              <TabsTrigger value="import_current">Import Current</TabsTrigger>
+            </TabsList>
+
+            <div className="space-y-4 pt-2">
+              {renderNameInput()}
+
+              <TabsContent value="oauth" className="m-0">
+                {renderOAuthTab()}
+              </TabsContent>
+
+              <TabsContent value="import_current" className="m-0">
+                <p className="text-muted-foreground text-sm">
+                  Import the Claude Code login currently stored on this device.
+                </p>
+              </TabsContent>
+
+              {renderError()}
+            </div>
+          </Tabs>
+        ) : (
+          <div className="space-y-4 pt-2">
+            {renderNameInput()}
+            <p className="text-muted-foreground text-sm">
+              Import the Claude Desktop App login currently active on this
+              device. Close Claude Desktop before importing. The app will still
+              be closed automatically when you switch accounts.
+            </p>
+            {isClaudeDesktopImportBlocked && (
+              <p className="text-amber-600 text-sm">
+                Claude Desktop is currently running. Close it before importing
+                this account.
+              </p>
+            )}
+            {renderError()}
+          </div>
         )}
 
         <DialogFooter>

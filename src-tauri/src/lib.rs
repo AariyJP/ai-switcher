@@ -7,8 +7,9 @@ pub mod types;
 pub mod web;
 
 use commands::{
-    add_account_from_file, add_claude_account_from_current, cancel_claude_login, cancel_login,
-    check_processes, complete_claude_login, complete_login, delete_account,
+    add_account_from_file, add_claude_account_from_current,
+    add_claude_desktop_account_from_current, cancel_claude_login, cancel_login, check_processes,
+    claude_desktop_logout, complete_claude_login, complete_login, delete_account,
     export_accounts_full_encrypted_file, export_accounts_slim_text, get_active_account_info,
     get_masked_account_ids, get_usage, import_accounts_full_encrypted_file,
     import_accounts_slim_text, list_accounts, refresh_account_metadata, refresh_all_accounts_usage,
@@ -28,6 +29,8 @@ pub fn run() {
             get_active_account_info,
             add_account_from_file,
             add_claude_account_from_current,
+            add_claude_desktop_account_from_current,
+            claude_desktop_logout,
             switch_account,
             delete_account,
             rename_account,

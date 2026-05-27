@@ -370,9 +370,14 @@ async fn run_oauth_server(
             Err(_) => continue,
         };
 
-        let result =
-            handle_oauth_request(request, &pkce, &expected_state, &redirect_uri, &account_name)
-                .await;
+        let result = handle_oauth_request(
+            request,
+            &pkce,
+            &expected_state,
+            &redirect_uri,
+            &account_name,
+        )
+        .await;
 
         match result {
             HandleResult::Continue => continue,
@@ -445,9 +450,8 @@ async fn handle_oauth_request(
         Some(c) if !c.is_empty() => c.clone(),
         _ => {
             println!("[ClaudeOAuth] Missing authorization code");
-            let _ = request.respond(
-                Response::from_string("Missing authorization code").with_status_code(400),
-            );
+            let _ = request
+                .respond(Response::from_string("Missing authorization code").with_status_code(400));
             return HandleResult::Error(anyhow::anyhow!("Missing authorization code"));
         }
     };
@@ -459,8 +463,7 @@ async fn handle_oauth_request(
         Err(e) => {
             println!("[ClaudeOAuth] Token exchange failed: {e}");
             let _ = request.respond(
-                Response::from_string(format!("Token exchange failed: {e}"))
-                    .with_status_code(500),
+                Response::from_string(format!("Token exchange failed: {e}")).with_status_code(500),
             );
             return HandleResult::Error(e);
         }

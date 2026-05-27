@@ -67,22 +67,21 @@ pub fn save_accounts(store: &AccountsStore) -> Result<()> {
 pub fn add_account(account: StoredAccount) -> Result<StoredAccount> {
     let mut store = load_accounts()?;
 
-    // Check for duplicate names
-    if store
-        .accounts
-        .iter()
-        .any(|a| a.tool == account.tool && a.name == account.name)
-    {
+    // Check for duplicate names within the same (tool, auth_mode) bucket
+    if store.accounts.iter().any(|a| {
+        a.tool == account.tool && a.auth_mode == account.auth_mode && a.name == account.name
+    }) {
         anyhow::bail!("An account with name '{}' already exists", account.name);
     }
 
     let account_clone = account.clone();
     let tool = account_clone.tool;
+    let auth_mode = account_clone.auth_mode;
     store.accounts.push(account);
 
-    // If this is the first account, make it active
-    if store.active_account_id_for(tool).is_none() {
-        store.set_active_account_id_for(tool, Some(account_clone.id.clone()));
+    // If this is the first account for this tool/mode, make it active
+    if store.active_account_id_for_mode(tool, auth_mode).is_none() {
+        store.set_active_account_id_for_mode(tool, auth_mode, Some(account_clone.id.clone()));
     }
 
     save_accounts(&store)?;
@@ -93,11 +92,11 @@ pub fn add_account(account: StoredAccount) -> Result<StoredAccount> {
 pub fn remove_account(account_id: &str) -> Result<()> {
     let mut store = load_accounts()?;
 
-    let removed_tool = store
+    let removed = store
         .accounts
         .iter()
         .find(|a| a.id == account_id)
-        .map(|a| a.tool);
+        .map(|a| (a.tool, a.auth_mode));
     let initial_len = store.accounts.len();
     store.accounts.retain(|a| a.id != account_id);
 
@@ -105,15 +104,15 @@ pub fn remove_account(account_id: &str) -> Result<()> {
         anyhow::bail!("Account not found: {account_id}");
     }
 
-    // If we removed the active account, clear it or set to first available
-    if let Some(tool) = removed_tool {
-        if store.active_account_id_for(tool) == Some(account_id) {
+    // If we removed the active account, clear it or set to first available within the same mode
+    if let Some((tool, auth_mode)) = removed {
+        if store.active_account_id_for_mode(tool, auth_mode) == Some(account_id) {
             let next = store
                 .accounts
                 .iter()
-                .find(|a| a.tool == tool)
+                .find(|a| a.tool == tool && a.auth_mode == auth_mode)
                 .map(|a| a.id.clone());
-            store.set_active_account_id_for(tool, next);
+            store.set_active_account_id_for_mode(tool, auth_mode, next);
         }
     }
 
@@ -126,14 +125,14 @@ pub fn set_active_account(account_id: &str) -> Result<()> {
     let mut store = load_accounts()?;
 
     // Verify the account exists
-    let tool = store
+    let (tool, auth_mode) = store
         .accounts
         .iter()
         .find(|a| a.id == account_id)
-        .map(|a| a.tool)
+        .map(|a| (a.tool, a.auth_mode))
         .ok_or_else(|| anyhow::anyhow!("Account not found: {account_id}"))?;
 
-    store.set_active_account_id_for(tool, Some(account_id.to_string()));
+    store.set_active_account_id_for_mode(tool, auth_mode, Some(account_id.to_string()));
     save_accounts(&store)?;
     Ok(())
 }
@@ -178,18 +177,19 @@ pub fn update_account_metadata(
 
     // Check for duplicate names first (if renaming)
     if let Some(ref new_name) = name {
-        let current_tool = store
+        let (current_tool, current_auth_mode) = store
             .accounts
             .iter()
             .find(|a| a.id == account_id)
-            .map(|a| a.tool)
+            .map(|a| (a.tool, a.auth_mode))
             .context("Account not found")?;
 
-        if store
-            .accounts
-            .iter()
-            .any(|a| a.id != account_id && a.tool == current_tool && a.name == *new_name)
-        {
+        if store.accounts.iter().any(|a| {
+            a.id != account_id
+                && a.tool == current_tool
+                && a.auth_mode == current_auth_mode
+                && a.name == *new_name
+        }) {
             anyhow::bail!("An account with name '{new_name}' already exists");
         }
     }
@@ -255,7 +255,7 @@ pub fn update_account_chatgpt_tokens(
                 *stored_account_id = Some(new_account_id);
             }
         }
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => {
+        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
             anyhow::bail!("Cannot update OAuth tokens for an API key account");
         }
     }
@@ -296,7 +296,7 @@ pub fn update_account_claude_credentials(
         } => {
             *stored_credentials = credentials;
         }
-        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {
+        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } | AuthData::ClaudeDesktop { .. } => {
             anyhow::bail!("Cannot update Claude credentials for a non-Claude account");
         }
     }

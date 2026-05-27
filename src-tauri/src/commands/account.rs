@@ -1,12 +1,14 @@
 //! Account management Tauri commands
 
+use super::process::check_processes;
 use crate::auth::{
     add_account, create_chatgpt_account_from_refresh_token, import_current_claude_account,
-    import_from_auth_json, import_from_auth_json_contents, load_accounts, remove_account,
-    save_accounts, set_active_account, switch_to_account, switch_to_claude_account, touch_account,
+    import_current_claude_desktop_account, import_from_auth_json, import_from_auth_json_contents,
+    load_accounts, logout_claude_desktop, remove_account, save_accounts, set_active_account,
+    switch_to_account, switch_to_claude_account, switch_to_claude_desktop_account, touch_account,
 };
 use crate::types::{
-    AccountInfo, AccountsStore, AuthData, ImportAccountsSummary, StoredAccount, ToolKind,
+    AccountInfo, AccountsStore, AuthData, AuthMode, ImportAccountsSummary, StoredAccount, ToolKind,
 };
 
 use anyhow::Context;
@@ -70,16 +72,21 @@ struct SlimAccountPayload {
 
 /// List all accounts with their info
 #[tauri::command]
-pub async fn list_accounts(tool: Option<ToolKind>) -> Result<Vec<AccountInfo>, String> {
+pub async fn list_accounts(
+    tool: Option<ToolKind>,
+    auth_mode: Option<AuthMode>,
+) -> Result<Vec<AccountInfo>, String> {
     let tool = tool.unwrap_or_default();
     let store = load_accounts().map_err(|e| e.to_string())?;
-    let active_id = store.active_account_id_for(tool);
 
     let accounts: Vec<AccountInfo> = store
         .accounts
         .iter()
-        .filter(|a| a.tool == tool)
-        .map(|a| AccountInfo::from_stored(a, active_id))
+        .filter(|a| a.tool == tool && auth_mode.map_or(true, |m| a.auth_mode == m))
+        .map(|a| {
+            let active_id = store.active_account_id_for_mode(a.tool, a.auth_mode);
+            AccountInfo::from_stored(a, active_id)
+        })
         .collect();
 
     Ok(accounts)
@@ -89,16 +96,21 @@ pub async fn list_accounts(tool: Option<ToolKind>) -> Result<Vec<AccountInfo>, S
 #[tauri::command]
 pub async fn get_active_account_info(
     tool: Option<ToolKind>,
+    auth_mode: Option<AuthMode>,
 ) -> Result<Option<AccountInfo>, String> {
     let tool = tool.unwrap_or_default();
     let store = load_accounts().map_err(|e| e.to_string())?;
-    let active_id = store.active_account_id_for(tool);
+    let resolved_mode = auth_mode.unwrap_or(match tool {
+        ToolKind::Codex => AuthMode::ChatGPT,
+        ToolKind::Claude => AuthMode::ClaudeCode,
+    });
+    let active_id = store.active_account_id_for_mode(tool, resolved_mode);
 
     if let Some(active_id) = active_id {
         if let Some(active) = store
             .accounts
             .iter()
-            .find(|a| a.id == active_id && a.tool == tool)
+            .find(|a| a.id == active_id && a.tool == tool && a.auth_mode == resolved_mode)
         {
             Ok(Some(AccountInfo::from_stored(active, Some(active_id))))
         } else {
@@ -144,7 +156,23 @@ pub async fn add_claude_account_from_current(name: String) -> Result<AccountInfo
     let stored = add_account(account).map_err(|e| e.to_string())?;
 
     let store = load_accounts().map_err(|e| e.to_string())?;
-    let active_id = store.active_account_id_for(ToolKind::Claude);
+    let active_id = store.active_account_id_for_mode(ToolKind::Claude, AuthMode::ClaudeCode);
+
+    Ok(AccountInfo::from_stored(&stored, active_id))
+}
+
+#[tauri::command]
+pub async fn add_claude_desktop_account_from_current(name: String) -> Result<AccountInfo, String> {
+    let process_info = check_processes(ToolKind::Claude).await?;
+    if process_info.count > 0 {
+        return Err("Close Claude Desktop before importing this account.".to_string());
+    }
+
+    let account = import_current_claude_desktop_account(name).map_err(|e| e.to_string())?;
+    let stored = add_account(account).map_err(|e| e.to_string())?;
+
+    let store = load_accounts().map_err(|e| e.to_string())?;
+    let active_id = store.active_account_id_for_mode(ToolKind::Claude, AuthMode::ClaudeDesktop);
 
     Ok(AccountInfo::from_stored(&stored, active_id))
 }
@@ -170,6 +198,9 @@ pub async fn switch_account(account_id: String) -> Result<(), String> {
         }
         AuthData::ClaudeCode { .. } => {
             switch_to_claude_account(account).map_err(|e| e.to_string())?;
+        }
+        AuthData::ClaudeDesktop { .. } => {
+            switch_to_claude_desktop_account(account).map_err(|e| e.to_string())?;
         }
     }
 
@@ -201,6 +232,18 @@ pub async fn switch_account(account_id: String) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+/// Clear Claude Desktop auth state so the user can log in fresh without
+/// triggering a server-side revoke of any previously imported account.
+#[tauri::command]
+pub async fn claude_desktop_logout() -> Result<(), String> {
+    logout_claude_desktop().map_err(|e| e.to_string())?;
+
+    let mut store = load_accounts().map_err(|e| e.to_string())?;
+    store.set_active_account_id_for_mode(ToolKind::Claude, AuthMode::ClaudeDesktop, None);
+    save_accounts(&store).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -396,7 +439,7 @@ fn encode_slim_payload_from_store(store: &AccountsStore) -> anyhow::Result<Strin
                 api_key: None,
                 refresh_token: Some(refresh_token.clone()),
             },
-            AuthData::ClaudeCode { .. } => unreachable!(),
+            AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => unreachable!(),
         })
         .collect();
 
@@ -526,6 +569,7 @@ async fn build_store_from_slim_payload(
         accounts,
         active_account_id,
         active_claude_account_id: None,
+        active_claude_desktop_account_id: None,
         masked_account_ids: Vec::new(),
     })
 }
@@ -705,20 +749,36 @@ fn validate_imported_store(store: &AccountsStore) -> anyhow::Result<()> {
         if !ids.insert(account.id.clone()) {
             anyhow::bail!("Import contains duplicate account id: {}", account.id);
         }
-        if !names.insert((account.tool, account.name.clone())) {
+        if !names.insert((account.tool, account.auth_mode, account.name.clone())) {
             anyhow::bail!("Import contains duplicate account name: {}", account.name);
         }
     }
 
     if let Some(active_id) = &store.active_account_id {
-        if !ids.contains(active_id) {
-            anyhow::bail!("Import references a missing active account: {active_id}");
+        if !store
+            .accounts
+            .iter()
+            .any(|a| &a.id == active_id && a.tool == ToolKind::Codex)
+        {
+            anyhow::bail!("Import references a missing active Codex account: {active_id}");
         }
     }
 
     if let Some(active_id) = &store.active_claude_account_id {
-        if !ids.contains(active_id) {
-            anyhow::bail!("Import references a missing active account: {active_id}");
+        if !store.accounts.iter().any(|a| {
+            &a.id == active_id && a.tool == ToolKind::Claude && a.auth_mode == AuthMode::ClaudeCode
+        }) {
+            anyhow::bail!("Import references a missing active Claude Code account: {active_id}");
+        }
+    }
+
+    if let Some(active_id) = &store.active_claude_desktop_account_id {
+        if !store.accounts.iter().any(|a| {
+            &a.id == active_id
+                && a.tool == ToolKind::Claude
+                && a.auth_mode == AuthMode::ClaudeDesktop
+        }) {
+            anyhow::bail!("Import references a missing active Claude Desktop account: {active_id}");
         }
     }
 
@@ -732,17 +792,18 @@ fn merge_accounts_store(
     let imported_version = imported.version;
     let imported_active_id = imported.active_account_id;
     let imported_active_claude_id = imported.active_claude_account_id;
+    let imported_active_claude_desktop_id = imported.active_claude_desktop_account_id;
     let total_in_payload = imported.accounts.len();
     let mut imported_count = 0usize;
     let mut existing_ids: HashSet<String> = current.accounts.iter().map(|a| a.id.clone()).collect();
-    let mut existing_names: HashSet<(ToolKind, String)> = current
+    let mut existing_names: HashSet<(ToolKind, AuthMode, String)> = current
         .accounts
         .iter()
-        .map(|a| (a.tool, a.name.clone()))
+        .map(|a| (a.tool, a.auth_mode, a.name.clone()))
         .collect();
 
     for account in imported.accounts {
-        let account_name_key = (account.tool, account.name.clone());
+        let account_name_key = (account.tool, account.auth_mode, account.name.clone());
         if existing_ids.contains(&account.id) || existing_names.contains(&account_name_key) {
             continue;
         }
@@ -787,32 +848,64 @@ fn merge_accounts_store(
 
     let current_claude_active_is_valid =
         current.active_claude_account_id.as_ref().is_some_and(|id| {
-            current
-                .accounts
-                .iter()
-                .any(|a| &a.id == id && a.tool == ToolKind::Claude)
+            current.accounts.iter().any(|a| {
+                &a.id == id && a.tool == ToolKind::Claude && a.auth_mode == AuthMode::ClaudeCode
+            })
         });
 
     if !current_claude_active_is_valid {
         if let Some(imported_active) = imported_active_claude_id {
-            if current
-                .accounts
-                .iter()
-                .any(|a| a.id == imported_active && a.tool == ToolKind::Claude)
-            {
+            if current.accounts.iter().any(|a| {
+                a.id == imported_active
+                    && a.tool == ToolKind::Claude
+                    && a.auth_mode == AuthMode::ClaudeCode
+            }) {
                 current.active_claude_account_id = Some(imported_active);
             } else {
                 current.active_claude_account_id = current
                     .accounts
                     .iter()
-                    .find(|a| a.tool == ToolKind::Claude)
+                    .find(|a| a.tool == ToolKind::Claude && a.auth_mode == AuthMode::ClaudeCode)
                     .map(|a| a.id.clone());
             }
         } else {
             current.active_claude_account_id = current
                 .accounts
                 .iter()
-                .find(|a| a.tool == ToolKind::Claude)
+                .find(|a| a.tool == ToolKind::Claude && a.auth_mode == AuthMode::ClaudeCode)
+                .map(|a| a.id.clone());
+        }
+    }
+
+    let current_claude_desktop_active_is_valid = current
+        .active_claude_desktop_account_id
+        .as_ref()
+        .is_some_and(|id| {
+            current.accounts.iter().any(|a| {
+                &a.id == id && a.tool == ToolKind::Claude && a.auth_mode == AuthMode::ClaudeDesktop
+            })
+        });
+
+    if !current_claude_desktop_active_is_valid {
+        if let Some(imported_active) = imported_active_claude_desktop_id {
+            if current.accounts.iter().any(|a| {
+                a.id == imported_active
+                    && a.tool == ToolKind::Claude
+                    && a.auth_mode == AuthMode::ClaudeDesktop
+            }) {
+                current.active_claude_desktop_account_id = Some(imported_active);
+            } else {
+                current.active_claude_desktop_account_id = current
+                    .accounts
+                    .iter()
+                    .find(|a| a.tool == ToolKind::Claude && a.auth_mode == AuthMode::ClaudeDesktop)
+                    .map(|a| a.id.clone());
+            }
+        } else {
+            current.active_claude_desktop_account_id = current
+                .accounts
+                .iter()
+                .find(|a| a.tool == ToolKind::Claude && a.auth_mode == AuthMode::ClaudeDesktop)
                 .map(|a| a.id.clone());
         }
     }

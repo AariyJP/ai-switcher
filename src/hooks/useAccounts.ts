@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type {
   AccountInfo,
+  AuthMode,
   UsageInfo,
   AccountWithUsage,
   WarmupSummary,
@@ -9,7 +10,7 @@ import type {
 } from "../types";
 import { invokeBackend, type FileSource } from "../lib/platform";
 
-export function useAccounts(tool: ToolKind = "codex") {
+export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
   const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -20,8 +21,9 @@ export function useAccounts(tool: ToolKind = "codex") {
     accountsRef.current = accounts;
   }, [accounts]);
 
-  const fetchedToolsRef = useRef<Set<ToolKind>>(new Set());
+  const fetchedToolsRef = useRef<Set<string>>(new Set());
   const usageCacheRef = useRef<Map<string, UsageInfo>>(new Map());
+  const toolKey = `${tool}:${authMode ?? ""}`;
 
   const buildUsageError = useCallback(
     (accountId: string, message: string, planType: string | null): UsageInfo => ({
@@ -66,7 +68,10 @@ export function useAccounts(tool: ToolKind = "codex") {
     try {
       setLoading(true);
       setError(null);
-      const accountList = await invokeBackend<AccountInfo[]>("list_accounts", { tool });
+      const accountList = await invokeBackend<AccountInfo[]>("list_accounts", {
+        tool,
+        authMode,
+      });
 
       setAccounts((prev) => {
         const prevMap = preserveUsage
@@ -89,7 +94,7 @@ export function useAccounts(tool: ToolKind = "codex") {
     } finally {
       setLoading(false);
     }
-  }, [tool]);
+  }, [tool, authMode]);
 
   const refreshUsage = useCallback(
     async (
@@ -98,7 +103,7 @@ export function useAccounts(tool: ToolKind = "codex") {
     ) => {
       try {
         let list = accountList ?? accountsRef.current;
-        if (list.length === 0) {
+        if (list.length === 0 || authMode === "claude_desktop") {
           return;
         }
 
@@ -164,7 +169,7 @@ export function useAccounts(tool: ToolKind = "codex") {
         throw err;
       }
     },
-    [buildUsageError, loadAccounts, maxConcurrentUsageRequests, runWithConcurrency, tool]
+    [buildUsageError, loadAccounts, maxConcurrentUsageRequests, runWithConcurrency, tool, authMode]
   );
 
   const refreshSingleUsage = useCallback(async (
@@ -172,6 +177,10 @@ export function useAccounts(tool: ToolKind = "codex") {
     options?: { refreshMetadata?: boolean }
   ) => {
     try {
+      if (authMode === "claude_desktop") {
+        return;
+      }
+
       if (options?.refreshMetadata && tool === "codex") {
         await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
         await loadAccounts(true);
@@ -204,7 +213,7 @@ export function useAccounts(tool: ToolKind = "codex") {
       );
       throw err;
     }
-  }, [buildUsageError, loadAccounts, tool]);
+  }, [buildUsageError, loadAccounts, tool, authMode]);
 
   const warmupAccount = useCallback(async (accountId: string) => {
     try {
@@ -299,19 +308,37 @@ export function useAccounts(tool: ToolKind = "codex") {
   const addClaudeFromCurrent = useCallback(
     async (name: string) => {
       try {
-        if (tool !== "claude") {
-          throw new Error("Claude import is only available on the Claude tab");
+        if (tool !== "claude" || authMode !== "claude_code") {
+          throw new Error("Claude Code import is only available on the Claude Code tab");
         }
 
         await invokeBackend<AccountInfo>("add_claude_account_from_current", { name });
         const accountList = await loadAccounts();
-        fetchedToolsRef.current.add(tool);
+        fetchedToolsRef.current.add(toolKey);
         await refreshUsage(accountList);
       } catch (err) {
         throw err;
       }
     },
-    [loadAccounts, refreshUsage, tool]
+    [loadAccounts, refreshUsage, tool, authMode, toolKey]
+  );
+
+  const addClaudeDesktopFromCurrent = useCallback(
+    async (name: string) => {
+      try {
+        if (tool !== "claude" || authMode !== "claude_desktop") {
+          throw new Error("Claude Desktop import is only available on the Claude tab");
+        }
+
+        await invokeBackend<AccountInfo>("add_claude_desktop_account_from_current", { name });
+        const accountList = await loadAccounts();
+        fetchedToolsRef.current.add(toolKey);
+        await refreshUsage(accountList);
+      } catch (err) {
+        throw err;
+      }
+    },
+    [loadAccounts, refreshUsage, tool, authMode, toolKey]
   );
 
   const startOAuthLogin = useCallback(async (accountName: string) => {
@@ -428,6 +455,15 @@ export function useAccounts(tool: ToolKind = "codex") {
     }
   }, []);
 
+  const logoutClaudeDesktop = useCallback(async () => {
+    try {
+      await invokeBackend("claude_desktop_logout");
+      await loadAccounts(true);
+    } catch (err) {
+      throw err;
+    }
+  }, [loadAccounts]);
+
   const loadMaskedAccountIds = useCallback(async () => {
     try {
       return await invokeBackend<string[]>("get_masked_account_ids");
@@ -448,16 +484,16 @@ export function useAccounts(tool: ToolKind = "codex") {
   useEffect(() => {
     setAccounts([]);
     loadAccounts().then((accountList) => {
-      if (fetchedToolsRef.current.has(tool)) {
+      if (fetchedToolsRef.current.has(toolKey)) {
         return;
       }
       if (accountList.length === 0) {
         return;
       }
-      fetchedToolsRef.current.add(tool);
+      fetchedToolsRef.current.add(toolKey);
       refreshUsage(accountList);
     });
-  }, [loadAccounts, refreshUsage, tool]);
+  }, [loadAccounts, refreshUsage, toolKey]);
 
   return {
     accounts,
@@ -473,6 +509,7 @@ export function useAccounts(tool: ToolKind = "codex") {
     renameAccount,
     importFromFile,
     addClaudeFromCurrent,
+    addClaudeDesktopFromCurrent,
     exportAccountsSlimText,
     importAccountsSlimText,
     exportAccountsFullEncryptedFile,
@@ -483,6 +520,7 @@ export function useAccounts(tool: ToolKind = "codex") {
     startClaudeOAuthLogin,
     completeClaudeOAuthLogin,
     cancelClaudeOAuthLogin,
+    logoutClaudeDesktop,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
   };
