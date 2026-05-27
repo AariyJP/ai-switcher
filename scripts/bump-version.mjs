@@ -90,7 +90,7 @@ const replaceCargoVersion = (contents) =>
 
 const replaceCargoLockVersion = (contents) => {
   const blockRegex =
-    /(\[\[package\]\]\r?\nname = "ai-switcher"\r?\nversion = ")\d+\.\d+\.\d+("[\s\S]*?\r?\n\r?\n)/;
+    /(\[\[package\]\]\nname = "ai-switcher"\nversion = ")\d+\.\d+\.\d+("[\s\S]*?\n\n)/;
   if (!blockRegex.test(contents)) {
     console.error(
       "Could not find ai-switcher package in Cargo.lock",
