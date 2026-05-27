@@ -4,7 +4,6 @@ on:
   push:
     branches-ignore:
       - main
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.ref }}
@@ -16,9 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-            name: macos-arm64
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             name: windows-x64
@@ -26,23 +22,25 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
 
       - name: Install frontend dependencies
         run: pnpm install
