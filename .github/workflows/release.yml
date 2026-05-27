@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.ref }}
@@ -19,28 +18,33 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - id: version
         shell: bash
         run: |
-          export TZ=Asia/Tokyo
-          VERSION="$(date '+%Y.%-m.%-d')"
+          VERSION="$(git log -1 --format=%s | tr -d '[:space:]')"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-  cleanup_existing:
-    needs: set_version
+  create_draft_release:
+    needs: [set_version]
     runs-on: ubuntu-slim
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
     steps:
-      - name: Delete existing release / tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.set_version.outputs.version }}
-        run: |
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
-          fi
+      - id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.set_version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: AI Switcher ${{ needs.set_version.outputs.version }}
+          body: |
+            ${{ needs.set_version.outputs.version }} ${{ github.sha }}
+          draft: true
 
   publish:
-    needs: [set_version, cleanup_existing]
+    needs: [set_version, create_draft_release]
     permissions:
       contents: write
     strategy:
@@ -57,48 +61,39 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: lts/*
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
         run: pnpm install
 
-      - name: Apply rolling version
-        shell: bash
-        env:
-          VERSION: ${{ needs.set_version.outputs.version }}
-        run: |
-          node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
-          node -e "const fs=require('fs');const p='package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
-          node -e "const fs=require('fs');const p='src-tauri/Cargo.toml';const t=fs.readFileSync(p,'utf8').replace(/^version = \".*\"/m, 'version = \"'+process.env.VERSION+'\"');fs.writeFileSync(p,t);"
+      - name: Bump version
+        run: pnpm version:bump "${{ needs.set_version.outputs.version }}"
 
-      - name: Build and release
-        uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ needs.set_version.outputs.version }}
-          releaseName: AI Switcher ${{ needs.set_version.outputs.version }}
-          releaseBody: |
-            Rolling release built from ${{ github.sha }} (Asia/Tokyo).
-          generateReleaseNotes: true
-          releaseDraft: false
-          prerelease: false
+          releaseId: ${{ needs.create_draft_release.outputs.release_id }}
           includeUpdaterJson: true
-          updaterJsonKeepUniversal: true
           args: --target ${{ matrix.target }}
+
+  finalize_release:
+    needs: [set_version, create_draft_release, publish]
+    runs-on: ubuntu-slim
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.set_version.outputs.version }}
+          draft: false
