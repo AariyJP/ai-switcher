@@ -6,6 +6,8 @@ pub mod commands;
 pub mod types;
 pub mod web;
 
+mod discord;
+
 use commands::{
     add_account_from_file, add_claude_account_from_current,
     add_claude_desktop_account_from_current, cancel_claude_login, cancel_login, check_processes,
@@ -23,6 +25,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .setup(|_| {
+            discord::start_discord_presence();
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // Account management
             list_accounts,
