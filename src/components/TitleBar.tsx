@@ -72,7 +72,7 @@ export function TitleBar() {
             onClick={() => {
               void appWindow.minimize();
             }}
-            className="h-full w-[46px] rounded-none"
+            className="h-full w-[46px] rounded-none border-0"
             title="Minimize"
           >
             <span style={segoeGlyphStyle} aria-hidden>{"\u{E921}"}</span>
@@ -83,7 +83,7 @@ export function TitleBar() {
             onClick={() => {
               void appWindow.toggleMaximize();
             }}
-            className="h-full w-[46px] rounded-none"
+            className="h-full w-[46px] rounded-none border-0"
             title={isMaximized ? "Restore" : "Maximize"}
           >
             <span style={segoeGlyphStyle} aria-hidden>
@@ -96,7 +96,7 @@ export function TitleBar() {
             onClick={() => {
               void appWindow.close();
             }}
-            className="h-full w-[46px] rounded-none hover:bg-destructive hover:text-destructive-foreground"
+            className="h-full w-[46px] rounded-none border-0"
             title="Close"
           >
             <span style={segoeGlyphStyle} aria-hidden>{"\u{E8BB}"}</span>
