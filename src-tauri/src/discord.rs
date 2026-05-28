@@ -10,7 +10,7 @@ use discord_rich_presence::{
 use rand::Rng;
 
 const DISCORD_CLIENT_ID: &str = "1509183960872128672";
-const RECONNECT_INTERVAL: Duration = Duration::from_secs(30);
+const RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
 
 const PONDERING_WORDS: &[&str] = &[
     "Accomplishing",
