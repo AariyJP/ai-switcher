@@ -4,12 +4,13 @@ use std::{
 };
 
 use discord_rich_presence::{
-    activity::{Activity, ActivityType, Timestamps},
+    activity::{Activity, ActivityType, Assets, Timestamps},
     DiscordIpc, DiscordIpcClient,
 };
 use rand::Rng;
 
 const DISCORD_CLIENT_ID: &str = "1509183960872128672";
+const PROJECT_URL: &str = "https://github.com/AariyJP/ai-switcher";
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
 
 const PONDERING_WORDS: &[&str] = &[
@@ -235,6 +236,8 @@ fn set_activity(
     client.set_activity(
         Activity::new()
             .details(&details)
+            .details_url(PROJECT_URL)
+            .assets(Assets::new().large_url(PROJECT_URL))
             .activity_type(ActivityType::Playing)
             .timestamps(Timestamps::new().start(start_time)),
     )
