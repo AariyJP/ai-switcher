@@ -1,7 +1,10 @@
-use std::{thread, time::Duration};
+use std::{
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use discord_rich_presence::{
-    activity::{Activity, ActivityType},
+    activity::{Activity, ActivityType, Timestamps},
     DiscordIpc, DiscordIpcClient,
 };
 use rand::Rng;
@@ -200,14 +203,19 @@ const PONDERING_WORDS: &[&str] = &[
 ];
 
 pub fn start_discord_presence() {
-    thread::spawn(|| loop {
+    let start_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    thread::spawn(move || loop {
         let mut client = DiscordIpcClient::new(DISCORD_CLIENT_ID);
 
-        if client.connect().is_ok() && set_activity(&mut client).is_ok() {
+        if client.connect().is_ok() && set_activity(&mut client, start_time).is_ok() {
             loop {
                 thread::sleep(RECONNECT_INTERVAL);
 
-                if set_activity(&mut client).is_err() {
+                if set_activity(&mut client, start_time).is_err() {
                     break;
                 }
             }
@@ -217,13 +225,17 @@ pub fn start_discord_presence() {
     });
 }
 
-fn set_activity(client: &mut DiscordIpcClient) -> Result<(), discord_rich_presence::error::Error> {
+fn set_activity(
+    client: &mut DiscordIpcClient,
+    start_time: i64,
+) -> Result<(), discord_rich_presence::error::Error> {
     let idx = rand::rng().random_range(0..PONDERING_WORDS.len());
     let details = format!("＊ {}...", PONDERING_WORDS[idx]);
 
     client.set_activity(
         Activity::new()
             .details(&details)
-            .activity_type(ActivityType::Playing),
+            .activity_type(ActivityType::Playing)
+            .timestamps(Timestamps::new().start(start_time)),
     )
 }
