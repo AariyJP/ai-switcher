@@ -189,15 +189,20 @@ export function AccountCard({
     }
   };
 
-  const planDisplay = account.plan_type
-    ? account.plan_type.charAt(0).toUpperCase() + account.plan_type.slice(1)
+  const normalizedPlanType = account.plan_type?.trim();
+  const planKey = normalizedPlanType?.toLowerCase() || "api_key";
+  const planDisplay = normalizedPlanType
+    ? normalizedPlanType.charAt(0).toUpperCase() + normalizedPlanType.slice(1)
     : account.auth_mode === "api_key"
       ? "API Key"
-      : "Unknown";
+      : null;
 
-  const planKey = account.plan_type?.toLowerCase() || "api_key";
   const planVariant = planVariantMap[planKey] ?? planVariantMap.free;
-  const showPlanBadge = account.auth_mode !== "claude_desktop";
+  const showPlanBadge =
+    planDisplay !== null &&
+    planKey !== "unknown" &&
+    account.auth_mode !== "claude_desktop" &&
+    !(account.auth_mode === "claude_code" && planKey === "code");
   const usageUnsupportedMessage =
     account.auth_mode === "claude_desktop"
       ? "Usage is currently not supported for Claude Desktop accounts."
