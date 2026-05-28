@@ -108,6 +108,7 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
         }
         AuthData::ClaudeCode { .. } => get_usage_with_claude_auth(account).await,
         AuthData::ChatGPT { .. } => get_usage_with_chatgpt_auth(account).await,
+        AuthData::ClaudeDesktop { .. } => get_usage_with_claude_desktop_auth(account).await,
     }
 }
 
@@ -122,6 +123,9 @@ pub async fn warmup_account(account: &StoredAccount) -> Result<()> {
         AuthData::ApiKey { key } => warmup_with_api_key(key).await,
         AuthData::ChatGPT { .. } => warmup_with_chatgpt_auth(account).await,
         AuthData::ClaudeCode { .. } => anyhow::bail!("Claude Code accounts don't support warm-up"),
+        AuthData::ClaudeDesktop { .. } => {
+            anyhow::bail!("Claude Desktop accounts don't support warm-up")
+        }
     }
 }
 
@@ -274,6 +278,13 @@ async fn parse_usage_response(
     );
 
     Ok(usage)
+}
+
+async fn get_usage_with_claude_desktop_auth(account: &StoredAccount) -> Result<UsageInfo> {
+    Ok(UsageInfo::error(
+        account.id.clone(),
+        "Usage is currently not supported for Claude Desktop accounts.".to_string(),
+    ))
 }
 
 async fn parse_claude_usage_response(
@@ -431,7 +442,7 @@ fn extract_chatgpt_auth(account: &StoredAccount) -> Result<(&str, Option<&str>)>
             account_id,
             ..
         } => Ok((access_token.as_str(), account_id.as_deref())),
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => {
+        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
             anyhow::bail!("Account is not using ChatGPT OAuth")
         }
     }
@@ -442,7 +453,7 @@ fn extract_claude_auth(account: &StoredAccount) -> Result<ClaudeOauthCredentials
         AuthData::ClaudeCode { credentials, .. } => {
             find_claude_oauth_credentials(credentials).context("Claude OAuth credentials not found")
         }
-        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {
+        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } | AuthData::ClaudeDesktop { .. } => {
             anyhow::bail!("Account is not using Claude Code OAuth")
         }
     }

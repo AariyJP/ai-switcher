@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Check, Eye, EyeOff, RefreshCw, Trash2, Zap } from "lucide-react";
+import { Check, Eye, EyeOff, LogOut, RefreshCw, Trash2, Zap } from "lucide-react";
 import type { AccountWithUsage } from "../types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ interface AccountCardProps {
   switchDisabledLabel?: string;
   switchDisabledTooltip?: string;
   onToggleMask?: () => void;
+  isLogoutCard?: boolean;
 }
 
 function formatLastRefresh(date: Date | null): string {
@@ -138,6 +139,7 @@ export function AccountCard({
   switchDisabledLabel = "Codex Running",
   switchDisabledTooltip = "Close all Codex processes first",
   onToggleMask,
+  isLogoutCard = false,
 }: AccountCardProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(
@@ -187,16 +189,88 @@ export function AccountCard({
     }
   };
 
-  const planDisplay = account.plan_type
-    ? account.plan_type.charAt(0).toUpperCase() + account.plan_type.slice(1)
+  const normalizedPlanType = account.plan_type?.trim();
+  const planKey = normalizedPlanType?.toLowerCase() || "api_key";
+  const planDisplay = normalizedPlanType
+    ? normalizedPlanType.charAt(0).toUpperCase() + normalizedPlanType.slice(1)
     : account.auth_mode === "api_key"
       ? "API Key"
-      : "Unknown";
+      : null;
 
-  const planKey = account.plan_type?.toLowerCase() || "api_key";
   const planVariant = planVariantMap[planKey] ?? planVariantMap.free;
+  const showPlanBadge =
+    planDisplay !== null &&
+    planKey !== "unknown" &&
+    account.auth_mode !== "claude_desktop" &&
+    !(account.auth_mode === "claude_code" && planKey === "code");
+  const usageUnsupportedMessage =
+    account.auth_mode === "claude_desktop"
+      ? "Usage is currently not supported for Claude Desktop accounts."
+      : null;
   const showSubscriptionStatus = usageEnabled && account.auth_mode === "chat_g_p_t";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
+
+  if (isLogoutCard) {
+    return (
+      <Card
+        className={cn(
+          "relative gap-0 p-5 transition-all duration-200",
+          account.is_active
+            ? "border-emerald-400 shadow-sm"
+            : "hover:border-foreground/20"
+        )}
+      >
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="mb-1 flex items-center gap-2">
+              {account.is_active && (
+                <span className="relative flex h-2 w-2">
+                  <span className="bg-emerald-400/75 absolute inline-flex h-2 w-2 animate-ping rounded-full" />
+                  <span className="bg-emerald-500 relative inline-flex h-2 w-2 rounded-full" />
+                </span>
+              )}
+              <h3 className="text-foreground truncate font-semibold">Logout</h3>
+            </div>
+            <p className="text-muted-foreground truncate text-sm">
+              Clear the current Claude Desktop login without revoking saved
+              accounts. Open Claude Desktop afterwards to sign in with a new
+              account.
+            </p>
+          </div>
+          <Badge variant="outline" className="rounded-full px-2.5 py-1">
+            <LogOut className="mr-1 size-3" /> Signed out
+          </Badge>
+        </div>
+
+        <div className="flex gap-2">
+          {account.is_active ? (
+            <Button disabled variant="secondary" className="flex-1">
+              <Check className="size-4" /> Logged out
+            </Button>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  onClick={onSwitch}
+                  disabled={switching || switchDisabled}
+                  className="flex-1"
+                >
+                  {switching
+                    ? "Logging out..."
+                    : switchDisabled
+                      ? switchDisabledLabel
+                      : "Logout"}
+                </Button>
+              </TooltipTrigger>
+              {switchDisabled && (
+                <TooltipContent>{switchDisabledTooltip}</TooltipContent>
+              )}
+            </Tooltip>
+          )}
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card
@@ -263,19 +337,30 @@ export function AccountCard({
               <TooltipContent>{masked ? "Show info" : "Hide info"}</TooltipContent>
             </Tooltip>
           )}
-          <Badge variant="outline" className={cn("rounded-full px-2.5 py-1", planVariant.className)}>
-            {planDisplay}
-          </Badge>
+          {showPlanBadge && (
+            <Badge
+              variant="outline"
+              className={cn("rounded-full px-2.5 py-1", planVariant.className)}
+            >
+              {planDisplay}
+            </Badge>
+          )}
         </div>
       </div>
 
-      {usageEnabled && (
+      {usageUnsupportedMessage && (
+        <div className="text-muted-foreground mb-3 rounded-md border px-3 py-2 text-sm italic">
+          {usageUnsupportedMessage}
+        </div>
+      )}
+
+      {usageEnabled && !usageUnsupportedMessage && (
         <div className="mb-3">
           <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
         </div>
       )}
 
-      {usageEnabled && (
+      {usageEnabled && !usageUnsupportedMessage && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="text-muted-foreground">
             Last updated: {formatLastRefresh(lastRefresh)}
@@ -309,7 +394,7 @@ export function AccountCard({
             )}
           </Tooltip>
         )}
-        {usageEnabled && warmupEnabled && (
+        {usageEnabled && !usageUnsupportedMessage && warmupEnabled && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -332,7 +417,7 @@ export function AccountCard({
             </TooltipContent>
           </Tooltip>
         )}
-        {usageEnabled && (
+        {usageEnabled && !usageUnsupportedMessage && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

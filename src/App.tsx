@@ -16,7 +16,14 @@ import {
 import { toast, Toaster } from "sonner";
 import { useAccounts } from "./hooks/useAccounts";
 import { AccountCard, AddAccountModal, TitleBar } from "./components";
-import type { ProcessInfo, ToolKind } from "./types";
+import {
+  LOGOUT_CARD_ID,
+  type AccountWithUsage,
+  type ActiveTool,
+  type AuthMode,
+  type ProcessInfo,
+  type ToolKind,
+} from "./types";
 import {
   exportFullBackupFile,
   importFullBackupFile,
@@ -54,7 +61,15 @@ import "./App.css";
 const THEME_STORAGE_KEY = "ai-switcher-theme";
 const ACTIVE_TOOL_STORAGE_KEY = "ai-switcher-active-tool";
 type ThemeMode = "light" | "dark" | "system";
-type ActiveTool = "codex" | "claude";
+
+const ACTIVE_TOOL_TO_BACKEND: Record<
+  ActiveTool,
+  { tool: ToolKind; authMode?: AuthMode }
+> = {
+  codex: { tool: "codex" },
+  claude_code: { tool: "claude", authMode: "claude_code" },
+  claude_desktop: { tool: "claude", authMode: "claude_desktop" },
+};
 type SortKey =
   | "deadline_asc"
   | "deadline_desc"
@@ -68,12 +83,17 @@ function App() {
     if (typeof window === "undefined") return "codex";
     try {
       const saved = window.localStorage.getItem(ACTIVE_TOOL_STORAGE_KEY);
-      if (saved === "codex" || saved === "claude") return saved;
+      if (saved === "codex" || saved === "claude_code" || saved === "claude_desktop") {
+        return saved;
+      }
+      if (saved === "claude") return "claude_code";
       return "codex";
     } catch {
       return "codex";
     }
   });
+
+  const backendTarget = ACTIVE_TOOL_TO_BACKEND[activeTool];
 
   const {
     accounts,
@@ -89,6 +109,7 @@ function App() {
     renameAccount,
     importFromFile,
     addClaudeFromCurrent,
+    addClaudeDesktopFromCurrent,
     exportAccountsSlimText,
     importAccountsSlimText,
     startOAuthLogin,
@@ -97,9 +118,10 @@ function App() {
     startClaudeOAuthLogin,
     completeClaudeOAuthLogin,
     cancelClaudeOAuthLogin,
+    logoutClaudeDesktop,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
-  } = useAccounts(activeTool);
+  } = useAccounts(backendTarget.tool, backendTarget.authMode);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
@@ -232,15 +254,23 @@ function App() {
 
   const handleSwitch = async (accountId: string) => {
     const latest = await checkProcesses();
-    if (latest && !latest[activeTool].can_switch) {
+    if (latest && !latest[backendTarget.tool].can_switch) {
       return;
     }
 
     try {
       setSwitchingId(accountId);
-      await switchAccount(accountId);
+      if (accountId === LOGOUT_CARD_ID) {
+        await logoutClaudeDesktop();
+        toast.success("Logged out of Claude Desktop");
+      } else {
+        await switchAccount(accountId);
+      }
     } catch (err) {
       console.error("Failed to switch account:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Failed to switch account"
+      );
     } finally {
       setSwitchingId(null);
     }
@@ -413,22 +443,52 @@ function App() {
     }
   };
 
-  const activeAccount = accounts.find((a) => a.is_active);
-  const otherAccounts = accounts.filter((a) => !a.is_active);
+  const logoutCard = useMemo<AccountWithUsage | null>(() => {
+    if (activeTool !== "claude_desktop") return null;
+    const anyRealActive = accounts.some((a) => a.is_active);
+    return {
+      id: LOGOUT_CARD_ID,
+      name: "Logout",
+      email: null,
+      plan_type: null,
+      subscription_expires_at: null,
+      tool: "claude",
+      auth_mode: "claude_desktop",
+      is_active: !anyRealActive,
+      created_at: new Date(0).toISOString(),
+      last_used_at: null,
+    };
+  }, [activeTool, accounts]);
+
+  const accountsWithLogout = useMemo<AccountWithUsage[]>(
+    () => (logoutCard ? [...accounts, logoutCard] : accounts),
+    [accounts, logoutCard]
+  );
+
+  const activeAccount = accountsWithLogout.find((a) => a.is_active);
+  const otherAccounts = accountsWithLogout.filter((a) => !a.is_active);
   const codexProcessInfo = processInfoByTool.codex;
   const claudeProcessInfo = processInfoByTool.claude;
   const hasRunningCodex = !!codexProcessInfo && codexProcessInfo.count > 0;
   const hasRunningClaude = !!claudeProcessInfo && claudeProcessInfo.count > 0;
   const usageEnabled = true;
   const warmupEnabled = activeTool === "codex";
-  const hasRunningActiveTool = activeTool === "codex" ? hasRunningCodex : hasRunningClaude;
-  const switchDisabledLabel = activeTool === "codex" ? "Codex Running" : "Claude Running";
+  const hasRunningActiveTool =
+    activeTool === "codex" ? hasRunningCodex : hasRunningClaude;
+  const switchDisabledLabel =
+    activeTool === "codex" ? "Codex Running" : "Claude Running";
   const switchDisabledTooltip =
-    activeTool === "codex" ? "Close all Codex processes first" : "Close all Claude processes first";
+    activeTool === "codex"
+      ? "Close all Codex processes first"
+      : "Close all Claude processes first";
 
   const sortedOtherAccounts = useMemo(() => {
-    if (activeTool === "claude") {
-      return [...otherAccounts].sort((a, b) => a.name.localeCompare(b.name));
+    if (activeTool !== "codex") {
+      return [...otherAccounts].sort((a, b) => {
+        if (a.id === LOGOUT_CARD_ID) return 1;
+        if (b.id === LOGOUT_CARD_ID) return -1;
+        return a.name.localeCompare(b.name);
+      });
     }
 
     const getResetDeadline = (resetAt: number | null | undefined) =>
@@ -643,7 +703,12 @@ function App() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuItem onSelect={() => setIsAddModalOpen(true)}>
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      void checkProcesses();
+                      setIsAddModalOpen(true);
+                    }}
+                  >
                     <Plus className="size-4" />
                     Add Account
                   </DropdownMenuItem>
@@ -691,14 +756,15 @@ function App() {
           <div className="mx-auto max-w-5xl px-6">
             <TabsList variant="line" className="flex w-full">
               <TabsTrigger value="codex">Codex</TabsTrigger>
-              <TabsTrigger value="claude">Claude</TabsTrigger>
+              <TabsTrigger value="claude_code">Claude Code</TabsTrigger>
+              <TabsTrigger value="claude_desktop">Claude Desktop</TabsTrigger>
             </TabsList>
           </div>
         </Tabs>
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-8">
-        {loading && accounts.length === 0 ? (
+        {loading && accountsWithLogout.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="text-foreground mb-4 size-10 animate-spin" />
             <p className="text-muted-foreground">Loading accounts...</p>
@@ -708,20 +774,33 @@ function App() {
             <div className="text-destructive mb-2">Failed to load accounts</div>
             <p className="text-muted-foreground text-sm">{error}</p>
           </div>
-        ) : accounts.length === 0 ? (
+        ) : accountsWithLogout.length === 0 ? (
           <div className="py-20 text-center">
             <div className="bg-muted mx-auto mb-4 flex size-16 items-center justify-center rounded-2xl">
-              {activeTool === "claude" ? (
-                <Bot className="text-muted-foreground size-8" />
-              ) : (
+              {activeTool === "codex" ? (
                 <User className="text-muted-foreground size-8" />
+              ) : (
+                <Bot className="text-muted-foreground size-8" />
               )}
             </div>
             <h2 className="text-foreground mb-2 text-xl font-semibold">No accounts yet</h2>
             <p className="text-muted-foreground mb-6">
-              Add your first {activeTool === "claude" ? "Claude" : "Codex"} account to get started
+              Add your first{" "}
+              {activeTool === "codex"
+                ? "Codex"
+                : activeTool === "claude_code"
+                  ? "Claude Code"
+                  : "Claude Desktop"}{" "}
+              account to get started
             </p>
-            <Button onClick={() => setIsAddModalOpen(true)}>Add Account</Button>
+            <Button
+              onClick={() => {
+                void checkProcesses();
+                setIsAddModalOpen(true);
+              }}
+            >
+              Add Account
+            </Button>
           </div>
         ) : (
           <div className="space-y-8">
@@ -747,9 +826,16 @@ function App() {
                   switchDisabledTooltip={switchDisabledTooltip}
                   warmingUp={isWarmingAll || warmingUpId === activeAccount.id}
                   masked={maskedAccounts.has(activeAccount.id)}
-                  usageEnabled={usageEnabled}
+                  usageEnabled={
+                    usageEnabled && activeAccount.id !== LOGOUT_CARD_ID
+                  }
                   warmupEnabled={warmupEnabled}
-                  onToggleMask={() => toggleMask(activeAccount.id)}
+                  onToggleMask={
+                    activeAccount.id === LOGOUT_CARD_ID
+                      ? undefined
+                      : () => toggleMask(activeAccount.id)
+                  }
+                  isLogoutCard={activeAccount.id === LOGOUT_CARD_ID}
                 />
               </section>
             )}
@@ -795,28 +881,34 @@ function App() {
                   )}
                 </div>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {sortedOtherAccounts.map((account) => (
-                    <AccountCard
-                      key={account.id}
-                      account={account}
-                      onSwitch={() => handleSwitch(account.id)}
-                      onWarmup={() => handleWarmupAccount(account.id, account.name)}
-                      onDelete={() => handleDelete(account.id)}
-                      onRefresh={() =>
-                        refreshSingleUsage(account.id, { refreshMetadata: true })
-                      }
-                      onRename={(newName) => renameAccount(account.id, newName)}
-                      switching={switchingId === account.id}
-                      switchDisabled={hasRunningActiveTool}
-                      switchDisabledLabel={switchDisabledLabel}
-                      switchDisabledTooltip={switchDisabledTooltip}
-                      warmingUp={isWarmingAll || warmingUpId === account.id}
-                      masked={maskedAccounts.has(account.id)}
-                      usageEnabled={usageEnabled}
-                      warmupEnabled={warmupEnabled}
-                      onToggleMask={() => toggleMask(account.id)}
-                    />
-                  ))}
+                  {sortedOtherAccounts.map((account) => {
+                    const isLogout = account.id === LOGOUT_CARD_ID;
+                    return (
+                      <AccountCard
+                        key={account.id}
+                        account={account}
+                        onSwitch={() => handleSwitch(account.id)}
+                        onWarmup={() => handleWarmupAccount(account.id, account.name)}
+                        onDelete={() => handleDelete(account.id)}
+                        onRefresh={() =>
+                          refreshSingleUsage(account.id, { refreshMetadata: true })
+                        }
+                        onRename={(newName) => renameAccount(account.id, newName)}
+                        switching={switchingId === account.id}
+                        switchDisabled={hasRunningActiveTool}
+                        switchDisabledLabel={switchDisabledLabel}
+                        switchDisabledTooltip={switchDisabledTooltip}
+                        warmingUp={isWarmingAll || warmingUpId === account.id}
+                        masked={maskedAccounts.has(account.id)}
+                        usageEnabled={usageEnabled && !isLogout}
+                        warmupEnabled={warmupEnabled}
+                        onToggleMask={
+                          isLogout ? undefined : () => toggleMask(account.id)
+                        }
+                        isLogoutCard={isLogout}
+                      />
+                    );
+                  })}
                 </div>
               </section>
             )}
@@ -826,10 +918,12 @@ function App() {
 
       <AddAccountModal
         isOpen={isAddModalOpen}
-        tool={activeTool}
+        activeTool={activeTool}
         onClose={() => setIsAddModalOpen(false)}
         onImportFile={importFromFile}
         onAddClaudeFromCurrent={addClaudeFromCurrent}
+        onAddClaudeDesktopFromCurrent={addClaudeDesktopFromCurrent}
+        claudeDesktopImportBlocked={activeTool === "claude_desktop" && hasRunningClaude}
         onStartOAuth={startOAuthLogin}
         onCompleteOAuth={completeOAuthLogin}
         onCancelOAuth={cancelOAuthLogin}

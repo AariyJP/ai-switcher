@@ -294,8 +294,8 @@ fn write_claude_credentials(credentials: &[ClaudeCredential]) -> Result<()> {
 
     map.insert("claudeAiOauth".to_string(), oauth);
 
-    let serialized = serde_json::to_string_pretty(&root)
-        .context("Failed to serialize Claude credentials")?;
+    let serialized =
+        serde_json::to_string_pretty(&root).context("Failed to serialize Claude credentials")?;
 
     std::fs::write(&path, serialized)
         .with_context(|| format!("Failed to write Claude credentials: {}", path.display()))?;

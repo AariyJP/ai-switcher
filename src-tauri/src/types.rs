@@ -29,6 +29,8 @@ pub struct AccountsStore {
     pub active_account_id: Option<String>,
     #[serde(default)]
     pub active_claude_account_id: Option<String>,
+    #[serde(default)]
+    pub active_claude_desktop_account_id: Option<String>,
     /// Set of account IDs that are masked (hidden)
     #[serde(default)]
     pub masked_account_ids: Vec<String>,
@@ -41,6 +43,7 @@ impl Default for AccountsStore {
             accounts: Vec::new(),
             active_account_id: None,
             active_claude_account_id: None,
+            active_claude_desktop_account_id: None,
             masked_account_ids: Vec::new(),
         }
     }
@@ -54,10 +57,35 @@ impl AccountsStore {
         }
     }
 
+    pub fn active_account_id_for_mode(&self, tool: ToolKind, auth_mode: AuthMode) -> Option<&str> {
+        match (tool, auth_mode) {
+            (ToolKind::Codex, _) => self.active_account_id.as_deref(),
+            (ToolKind::Claude, AuthMode::ClaudeDesktop) => {
+                self.active_claude_desktop_account_id.as_deref()
+            }
+            (ToolKind::Claude, _) => self.active_claude_account_id.as_deref(),
+        }
+    }
+
     pub fn set_active_account_id_for(&mut self, tool: ToolKind, account_id: Option<String>) {
         match tool {
             ToolKind::Codex => self.active_account_id = account_id,
             ToolKind::Claude => self.active_claude_account_id = account_id,
+        }
+    }
+
+    pub fn set_active_account_id_for_mode(
+        &mut self,
+        tool: ToolKind,
+        auth_mode: AuthMode,
+        account_id: Option<String>,
+    ) {
+        match (tool, auth_mode) {
+            (ToolKind::Codex, _) => self.active_account_id = account_id,
+            (ToolKind::Claude, AuthMode::ClaudeDesktop) => {
+                self.active_claude_desktop_account_id = account_id
+            }
+            (ToolKind::Claude, _) => self.active_claude_account_id = account_id,
         }
     }
 }
@@ -158,10 +186,34 @@ impl StoredAccount {
             last_used_at: None,
         }
     }
+
+    pub fn new_claude_desktop(
+        name: String,
+        email: Option<String>,
+        plan_type: Option<String>,
+        oauth_token_cache: String,
+        session: ClaudeDesktopSession,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            name,
+            email,
+            plan_type,
+            subscription_expires_at: None,
+            tool: ToolKind::Claude,
+            auth_mode: AuthMode::ClaudeDesktop,
+            auth_data: AuthData::ClaudeDesktop {
+                oauth_token_cache,
+                session,
+            },
+            created_at: Utc::now(),
+            last_used_at: None,
+        }
+    }
 }
 
 /// Authentication mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMode {
     /// Using an OpenAI API key
@@ -169,6 +221,7 @@ pub enum AuthMode {
     /// Using ChatGPT OAuth tokens
     ChatGPT,
     ClaudeCode,
+    ClaudeDesktop,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,6 +256,60 @@ pub enum AuthData {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         oauth_account: Option<serde_json::Value>,
     },
+    ClaudeDesktop {
+        oauth_token_cache: String,
+        session: ClaudeDesktopSession,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeDesktopSession {
+    pub session_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org_uuid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    pub cookies: Vec<ClaudeDesktopCookie>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeDesktopCookie {
+    pub name: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_frame_site_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_utc: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_secure: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_httponly: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_expires: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_persistent: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samesite: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_scheme: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_port: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_cross_site_ancestor: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_utc: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_access_utc: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_update_utc: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -306,7 +413,9 @@ impl AccountInfo {
             AuthData::ChatGPT { id_token, .. } => {
                 parse_chatgpt_id_token_claims(id_token).subscription_expires_at
             }
-            AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => None,
+            AuthData::ApiKey { .. }
+            | AuthData::ClaudeCode { .. }
+            | AuthData::ClaudeDesktop { .. } => None,
         };
 
         Self {
