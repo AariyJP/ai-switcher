@@ -2,7 +2,11 @@
 
 export type ToolKind = "codex" | "claude";
 
-export type AuthMode = "api_key" | "chat_g_p_t" | "claude_code";
+export type AuthMode = "api_key" | "chat_g_p_t" | "claude_code" | "claude_desktop";
+
+export type ActiveTool = "codex" | "claude_code" | "claude_desktop";
+
+export const LOGOUT_CARD_ID = "__claude_desktop_logout__";
 
 export interface AccountInfo {
   id: string;

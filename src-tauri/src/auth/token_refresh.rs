@@ -51,7 +51,9 @@ struct ClaudeRefreshTarget {
 /// Returns an updated account when a refresh was performed.
 pub async fn ensure_chatgpt_tokens_fresh(account: &StoredAccount) -> Result<StoredAccount> {
     match &account.auth_data {
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => Ok(account.clone()),
+        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
+            Ok(account.clone())
+        }
         AuthData::ChatGPT { access_token, .. } => {
             if token_expired_or_near_expiry(access_token) {
                 println!(
@@ -97,7 +99,9 @@ pub fn sync_active_claude_account_credentials(
 /// Force-refresh ChatGPT OAuth tokens for an account.
 pub async fn refresh_chatgpt_tokens(account: &StoredAccount) -> Result<StoredAccount> {
     let (current_id_token, current_refresh_token, current_account_id) = match &account.auth_data {
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => return Ok(account.clone()),
+        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
+            return Ok(account.clone())
+        }
         AuthData::ChatGPT {
             id_token,
             refresh_token,

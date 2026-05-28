@@ -11,14 +11,15 @@ use tokio::runtime::Runtime;
 
 use crate::commands::{
     add_account_from_auth_json_text, add_account_from_file, add_claude_account_from_current,
-    cancel_claude_login, cancel_login, check_processes, complete_claude_login, complete_login,
-    delete_account, export_accounts_full_encrypted_bytes, export_accounts_slim_text,
-    get_active_account_info, get_masked_account_ids, get_usage,
-    import_accounts_full_encrypted_bytes, import_accounts_slim_text, list_accounts,
-    refresh_account_metadata, refresh_all_accounts_usage, rename_account, set_masked_account_ids,
-    start_claude_login, start_login, switch_account, warmup_account, warmup_all_accounts,
+    add_claude_desktop_account_from_current, cancel_claude_login, cancel_login, check_processes,
+    claude_desktop_logout, complete_claude_login, complete_login, delete_account,
+    export_accounts_full_encrypted_bytes, export_accounts_slim_text, get_active_account_info,
+    get_masked_account_ids, get_usage, import_accounts_full_encrypted_bytes,
+    import_accounts_slim_text, list_accounts, refresh_account_metadata, refresh_all_accounts_usage,
+    rename_account, set_masked_account_ids, start_claude_login, start_login, switch_account,
+    warmup_account, warmup_all_accounts,
 };
-use crate::types::ToolKind;
+use crate::types::{AuthMode, ToolKind};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,8 +74,11 @@ struct FileImportArgs {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ToolArgs {
     tool: Option<ToolKind>,
+    #[serde(default, alias = "auth_mode")]
+    auth_mode: Option<AuthMode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,11 +145,11 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
     match command {
         "list_accounts" => {
             let args: ToolArgs = parse_args(payload)?;
-            to_json(list_accounts(args.tool).await?)
+            to_json(list_accounts(args.tool, args.auth_mode).await?)
         }
         "get_active_account_info" => {
             let args: ToolArgs = parse_args(payload)?;
-            to_json(get_active_account_info(args.tool).await?)
+            to_json(get_active_account_info(args.tool, args.auth_mode).await?)
         }
         "add_account_from_file" => {
             let args: FileImportArgs = parse_args(payload)?;
@@ -155,6 +159,11 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             let args: ClaudeImportArgs = parse_args(payload)?;
             to_json(add_claude_account_from_current(args.name).await?)
         }
+        "add_claude_desktop_account_from_current" => {
+            let args: ClaudeImportArgs = parse_args(payload)?;
+            to_json(add_claude_desktop_account_from_current(args.name).await?)
+        }
+        "claude_desktop_logout" => to_json(claude_desktop_logout().await?),
         "add_account_from_auth_json_text" => {
             let args: UploadAuthJsonArgs = parse_args(payload)?;
             to_json(add_account_from_auth_json_text(args.name, args.contents).await?)
