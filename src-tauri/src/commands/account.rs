@@ -100,18 +100,17 @@ pub async fn get_active_account_info(
 ) -> Result<Option<AccountInfo>, String> {
     let tool = tool.unwrap_or_default();
     let store = load_accounts().map_err(|e| e.to_string())?;
-    let resolved_mode = auth_mode.unwrap_or(match tool {
-        ToolKind::Codex => AuthMode::ChatGPT,
-        ToolKind::Claude => AuthMode::ClaudeCode,
-    });
-    let active_id = store.active_account_id_for_mode(tool, resolved_mode);
+    let active_id = match auth_mode {
+        Some(mode) => store.active_account_id_for_mode(tool, mode),
+        None => store.active_account_id_for(tool),
+    };
 
     if let Some(active_id) = active_id {
-        if let Some(active) = store
-            .accounts
-            .iter()
-            .find(|a| a.id == active_id && a.tool == tool && a.auth_mode == resolved_mode)
-        {
+        if let Some(active) = store.accounts.iter().find(|a| {
+            a.id == active_id
+                && a.tool == tool
+                && auth_mode.map_or(true, |mode| a.auth_mode == mode)
+        }) {
             Ok(Some(AccountInfo::from_stored(active, Some(active_id))))
         } else {
             Ok(None)
