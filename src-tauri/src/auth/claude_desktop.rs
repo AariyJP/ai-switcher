@@ -5,9 +5,13 @@ use crate::types::{AuthData, ClaudeDesktopCookie, ClaudeDesktopSession, StoredAc
 
 const OAUTH_TOKEN_CACHE_KEY: &str = "oauth:tokenCache";
 const V10_PREFIX: &[u8; 3] = b"v10";
+#[cfg(windows)]
 const DPAPI_PREFIX: &[u8; 5] = b"DPAPI";
+#[cfg(windows)]
 const AES_GCM_NONCE_LEN: usize = 12;
+#[cfg(windows)]
 const AES_GCM_TAG_LEN: usize = 16;
+#[cfg(windows)]
 const AES_256_KEY_LEN: usize = 32;
 
 pub fn import_current_claude_desktop_account(account_name: String) -> Result<StoredAccount> {
@@ -586,13 +590,58 @@ fn encrypt_cookie_value(host_key: &str, value: &str) -> Result<Vec<u8>> {
 }
 
 #[cfg(target_os = "macos")]
-fn decrypt_cookie_value(_raw: &[u8]) -> Result<String> {
-    anyhow::bail!("Claude Desktop cookie decryption is not yet implemented on macOS")
+fn decrypt_cookie_value(raw: &[u8]) -> Result<String> {
+    use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+
+    if raw.len() < V10_PREFIX.len() {
+        anyhow::bail!("cookie value too short");
+    }
+    if &raw[0..V10_PREFIX.len()] != V10_PREFIX {
+        anyhow::bail!("unsupported cookie value prefix");
+    }
+    let ciphertext = &raw[V10_PREFIX.len()..];
+
+    let key = macos_aes_key()?;
+    let iv: [u8; 16] = [0x20; 16];
+
+    let plaintext = Aes128CbcDec::new(&key.into(), &iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|e| anyhow::anyhow!("AES-CBC decrypt failed: {e}"))?;
+
+    let bytes = if plaintext.len() > 32
+        && plaintext
+            .iter()
+            .take(32)
+            .any(|b| !b.is_ascii() || *b < 0x20)
+    {
+        plaintext[32..].to_vec()
+    } else {
+        plaintext
+    };
+    String::from_utf8(bytes).context("Decrypted cookie value is not UTF-8")
 }
 
 #[cfg(target_os = "macos")]
-fn encrypt_cookie_value(_host_key: &str, _value: &str) -> Result<Vec<u8>> {
-    anyhow::bail!("Claude Desktop cookie encryption is not yet implemented on macOS")
+fn encrypt_cookie_value(host_key: &str, value: &str) -> Result<Vec<u8>> {
+    use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    use sha2::{Digest, Sha256};
+    type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
+
+    let key = macos_aes_key()?;
+    let iv: [u8; 16] = [0x20; 16];
+
+    let mut plaintext = Vec::with_capacity(32 + value.len());
+    plaintext.extend_from_slice(&Sha256::digest(host_key.as_bytes()));
+    plaintext.extend_from_slice(value.as_bytes());
+
+    let ciphertext = Aes128CbcEnc::new(&key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+
+    let mut out = Vec::with_capacity(V10_PREFIX.len() + ciphertext.len());
+    out.extend_from_slice(V10_PREFIX);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
 }
 
 #[cfg(windows)]
@@ -700,12 +749,65 @@ unsafe fn dpapi_unprotect(input: &[u8]) -> Result<Vec<u8>> {
     Ok(result)
 }
 
-#[cfg(not(windows))]
-fn decrypt_token_cache(_encrypted_b64: &str) -> Result<String> {
-    anyhow::bail!("Claude Desktop switching is currently supported on Windows only")
+#[cfg(target_os = "macos")]
+fn decrypt_token_cache(encrypted_b64: &str) -> Result<String> {
+    use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    use base64::Engine;
+    type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encrypted_b64.as_bytes())
+        .context("Failed to base64-decode oauth:tokenCache")?;
+    if raw.len() < V10_PREFIX.len() || &raw[0..V10_PREFIX.len()] != V10_PREFIX {
+        anyhow::bail!("Unsupported or malformed oauth:tokenCache blob");
+    }
+    let ciphertext = &raw[V10_PREFIX.len()..];
+
+    let key = macos_aes_key()?;
+    let iv: [u8; 16] = [0x20; 16];
+
+    let plaintext = Aes128CbcDec::new(&key.into(), &iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|e| anyhow::anyhow!("AES-CBC decrypt failed: {e}"))?;
+    String::from_utf8(plaintext).context("Decrypted oauth:tokenCache is not valid UTF-8")
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn encrypt_token_cache(plaintext: &str) -> Result<String> {
+    use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    use base64::Engine;
+    type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
+
+    let key = macos_aes_key()?;
+    let iv: [u8; 16] = [0x20; 16];
+
+    let ciphertext = Aes128CbcEnc::new(&key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(plaintext.as_bytes());
+
+    let mut out = Vec::with_capacity(V10_PREFIX.len() + ciphertext.len());
+    out.extend_from_slice(V10_PREFIX);
+    out.extend_from_slice(&ciphertext);
+    Ok(base64::engine::general_purpose::STANDARD.encode(&out))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_aes_key() -> Result<[u8; 16]> {
+    let password = security_framework::passwords::get_generic_password(
+        "Claude Safe Storage",
+        "Claude",
+    )
+    .context("Failed to read 'Claude Safe Storage' password from macOS Keychain. Allow access when prompted, or launch Claude Desktop and sign in at least once.")?;
+
+    let key = pbkdf2::pbkdf2_hmac_array::<sha1::Sha1, 16>(&password, b"saltysalt", 1003);
+    Ok(key)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn decrypt_token_cache(_encrypted_b64: &str) -> Result<String> {
+    anyhow::bail!("Claude Desktop switching is not supported on this platform")
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn encrypt_token_cache(_plaintext: &str) -> Result<String> {
-    anyhow::bail!("Claude Desktop switching is currently supported on Windows only")
+    anyhow::bail!("Claude Desktop switching is not supported on this platform")
 }
