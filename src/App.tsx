@@ -4,7 +4,6 @@ import {
   ChevronDown,
   Eye,
   EyeOff,
-  Loader2,
   Monitor,
   Moon,
   Plus,
@@ -30,6 +29,7 @@ import {
   importFullBackupFile,
   invokeBackend,
 } from "./lib/platform";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,12 +47,21 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -158,6 +167,17 @@ function getLastSuccessfulWarmupAt(
   accountId: string
 ): number | undefined {
   return ledger[accountId]?.lastSuccessfulWarmupAt;
+}
+
+// Process-status badge palette using semantic success/warning tokens.
+function processBadgeClass(isRunning: boolean) {
+  return isRunning
+    ? "border-warning/30 bg-warning/10 text-warning"
+    : "border-success/30 bg-success/10 text-success";
+}
+
+function processDotClass(isRunning: boolean) {
+  return isRunning ? "bg-warning" : "bg-success";
 }
 
 function App() {
@@ -948,16 +968,12 @@ function App() {
                   {codexProcessInfo && (
                     <Badge
                       variant="outline"
-                      className={cn(
-                        hasRunningCodex
-                          ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-                          : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                      )}
+                      className={processBadgeClass(hasRunningCodex)}
                     >
                       <span
                         className={cn(
                           "inline-block size-1.5 rounded-full",
-                          hasRunningCodex ? "bg-amber-500" : "bg-emerald-500"
+                          processDotClass(hasRunningCodex)
                         )}
                       />
                       {codexProcessInfo.count} Codex running
@@ -966,16 +982,12 @@ function App() {
                   {claudeProcessInfo && (
                     <Badge
                       variant="outline"
-                      className={cn(
-                        hasRunningClaude
-                          ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-                          : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                      )}
+                      className={processBadgeClass(hasRunningClaude)}
                     >
                       <span
                         className={cn(
                           "inline-block size-1.5 rounded-full",
-                          hasRunningClaude ? "bg-amber-500" : "bg-emerald-500"
+                          processDotClass(hasRunningClaude)
                         )}
                       />
                       {claudeProcessInfo.count} Claude running
@@ -989,7 +1001,7 @@ function App() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="outline" size="icon" onClick={toggleMaskAll}>
-                    {allMasked ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                    {allMasked ? <EyeOff /> : <Eye />}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -1006,7 +1018,7 @@ function App() {
                     onClick={handleRefresh}
                     disabled={isRefreshing}
                   >
-                    <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} />
+                    <RefreshCw className={cn(isRefreshing && "animate-spin")} />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -1022,7 +1034,7 @@ function App() {
                       onClick={handleWarmupAll}
                       disabled={isWarmingAll || accounts.length === 0}
                     >
-                      <Zap className={cn("size-4", isWarmingAll && "animate-pulse")} />
+                      <Zap className={cn(isWarmingAll && "animate-pulse")} />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Send minimal traffic using all accounts</TooltipContent>
@@ -1038,7 +1050,7 @@ function App() {
                       className={cn(
                         "whitespace-nowrap",
                         autoWarmupAllEnabled &&
-                          "border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
+                          "border-success/30 text-success hover:bg-success/10"
                       )}
                     >
                       {headerAutoWarmupLabel}
@@ -1054,7 +1066,7 @@ function App() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="outline" size="icon" onClick={cycleTheme}>
-                    <ThemeIcon className="size-4" />
+                    <ThemeIcon />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{themeTitle}</TooltipContent>
@@ -1064,7 +1076,7 @@ function App() {
                 <DropdownMenuTrigger asChild>
                   <Button>
                     Account
-                    <ChevronDown className="size-4" />
+                    <ChevronDown data-icon="inline-end" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
@@ -1074,7 +1086,7 @@ function App() {
                       setIsAddModalOpen(true);
                     }}
                   >
-                    <Plus className="size-4" />
+                    <Plus />
                     Add Account
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
@@ -1130,45 +1142,45 @@ function App() {
 
       <main className="mx-auto max-w-5xl px-6 py-8">
         {loading && accountsWithLogout.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20">
-            <Loader2 className="text-foreground mb-4 size-10 animate-spin" />
+          <div className="flex flex-col items-center justify-center gap-4 py-20">
+            <Spinner className="text-foreground size-10" />
             <p className="text-muted-foreground">Loading accounts...</p>
           </div>
         ) : error ? (
-          <div className="py-20 text-center">
-            <div className="text-destructive mb-2">Failed to load accounts</div>
-            <p className="text-muted-foreground text-sm">{error}</p>
-          </div>
+          <Alert variant="destructive" className="mx-auto max-w-md">
+            <AlertTitle>Failed to load accounts</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         ) : accountsWithLogout.length === 0 ? (
-          <div className="py-20 text-center">
-            <div className="bg-muted mx-auto mb-4 flex size-16 items-center justify-center rounded-2xl">
-              {activeTool === "codex" ? (
-                <User className="text-muted-foreground size-8" />
-              ) : (
-                <Bot className="text-muted-foreground size-8" />
-              )}
-            </div>
-            <h2 className="text-foreground mb-2 text-xl font-semibold">No accounts yet</h2>
-            <p className="text-muted-foreground mb-6">
-              Add your first{" "}
-              {activeTool === "codex"
-                ? "Codex"
-                : activeTool === "claude_code"
-                  ? "Claude Code"
-                  : "Claude Desktop"}{" "}
-              account to get started
-            </p>
-            <Button
-              onClick={() => {
-                void checkProcesses();
-                setIsAddModalOpen(true);
-              }}
-            >
-              Add Account
-            </Button>
-          </div>
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                {activeTool === "codex" ? <User /> : <Bot />}
+              </EmptyMedia>
+              <EmptyTitle>No accounts yet</EmptyTitle>
+              <EmptyDescription>
+                Add your first{" "}
+                {activeTool === "codex"
+                  ? "Codex"
+                  : activeTool === "claude_code"
+                    ? "Claude Code"
+                    : "Claude Desktop"}{" "}
+                account to get started
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button
+                onClick={() => {
+                  void checkProcesses();
+                  setIsAddModalOpen(true);
+                }}
+              >
+                Add Account
+              </Button>
+            </EmptyContent>
+          </Empty>
         ) : (
-          <div className="space-y-8">
+          <div className="flex flex-col gap-8">
             {activeAccount && (
               <section>
                 <h2 className="text-muted-foreground mb-4 text-sm font-medium uppercase tracking-wider">
@@ -1344,11 +1356,13 @@ function App() {
             </DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="flex flex-col gap-4">
             {configModalMode === "slim_import" ? (
-              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
-                Existing accounts are kept. Only missing accounts are imported.
-              </p>
+              <Alert className="border-warning/30 bg-warning/10">
+                <AlertDescription className="text-warning">
+                  Existing accounts are kept. Only missing accounts are imported.
+                </AlertDescription>
+              </Alert>
             ) : (
               <p className="text-muted-foreground text-sm">
                 This slim string contains account secrets. Keep it private.
@@ -1368,9 +1382,9 @@ function App() {
               className="h-48 font-mono"
             />
             {configModalError && (
-              <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
-                {configModalError}
-              </div>
+              <Alert variant="destructive">
+                <AlertDescription>{configModalError}</AlertDescription>
+              </Alert>
             )}
           </div>
 

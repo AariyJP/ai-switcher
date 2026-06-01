@@ -1,4 +1,5 @@
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { UsageInfo } from "../types";
 
@@ -50,19 +51,20 @@ function RateLimitBar({
   resetsAt?: number | null;
 }) {
   const remainingPercent = Math.max(0, 100 - usedPercent);
+  // Semantic status color: low remaining → destructive → warning → success
   const indicatorClass =
     remainingPercent <= 10
-      ? "bg-red-500"
+      ? "bg-destructive"
       : remainingPercent <= 30
-        ? "bg-amber-500"
-        : "bg-emerald-500";
+        ? "bg-warning"
+        : "bg-success";
 
   const windowLabel = formatWindowDuration(windowMinutes);
   const resetLabel = formatResetTime(resetsAt);
   const exactResetLabel = formatExactResetTime(resetsAt);
 
   return (
-    <div className="space-y-1">
+    <div className="flex flex-col gap-1">
       <div className="text-muted-foreground flex justify-between text-xs">
         <span>
           {label} {windowLabel && `(${windowLabel})`}
@@ -85,21 +87,15 @@ function RateLimitBar({
 export function UsageBar({ usage, loading }: UsageBarProps) {
   if (loading && !usage) {
     return (
-      <div className="space-y-2">
-        <div className="text-muted-foreground animate-pulse text-xs italic">
-          Fetching usage...
-        </div>
-        <Progress value={66} className="h-1.5 animate-pulse" />
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-3 w-32" />
+        <Skeleton className="h-1.5 w-full" />
       </div>
     );
   }
 
   if (!usage) {
-    return (
-      <div className="text-muted-foreground animate-pulse py-1 text-xs italic">
-        Fetching usage...
-      </div>
-    );
+    return <Skeleton className="h-3 w-24" />;
   }
 
   if (usage.error) {
@@ -120,7 +116,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-2">
       {hasPrimary && (
         <RateLimitBar
           label="5h Limit"

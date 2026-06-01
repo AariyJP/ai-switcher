@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { Check, Eye, EyeOff, LogOut, RefreshCw, Trash2, Zap } from "lucide-react";
 import type { AccountWithUsage } from "../types";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -43,6 +44,7 @@ function formatLastRefresh(date: Date | null): string {
   return date.toLocaleDateString();
 }
 
+// Subscription status uses semantic tokens: destructive (expired/<=3d), warning (<=7d), muted (else).
 function getSubscriptionStatus(timestamp: string | null | undefined): {
   label: string;
   className: string;
@@ -65,19 +67,19 @@ function getSubscriptionStatus(timestamp: string | null | undefined): {
   if (remainingMs <= 0) {
     return {
       label: `Expired ${formattedDate}`,
-      className: "text-red-500 dark:text-red-400",
+      className: "text-destructive",
     };
   }
   if (remainingMs <= 3 * 24 * 60 * 60 * 1000) {
     return {
       label: `Until ${formattedDate}`,
-      className: "text-red-500 dark:text-red-400",
+      className: "text-destructive",
     };
   }
   if (remainingMs <= 7 * 24 * 60 * 60 * 1000) {
     return {
       label: `Until ${formattedDate}`,
-      className: "text-amber-500 dark:text-amber-400",
+      className: "text-warning",
     };
   }
   return {
@@ -97,35 +99,44 @@ function BlurredText({ children, blur }: { children: React.ReactNode; blur: bool
   );
 }
 
-const planVariantMap: Record<
-  string,
-  { className: string }
-> = {
-  pro: {
-    className:
-      "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
-  },
-  plus: {
-    className:
-      "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
-  },
-  team: {
-    className:
-      "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
-  },
-  enterprise: {
-    className:
-      "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-  },
-  free: {
-    className:
-      "border-border bg-muted text-muted-foreground",
-  },
-  api_key: {
-    className:
-      "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-900/30 dark:text-orange-300",
-  },
+// Plan badge: prefer built-in variants; success/warning tones use semantic CSS tokens.
+type PlanBadgeProps = {
+  variant: "default" | "secondary" | "outline";
+  className?: string;
 };
+
+function getPlanBadgeProps(planKey: string): PlanBadgeProps {
+  switch (planKey) {
+    case "pro":
+      return { variant: "default" };
+    case "plus":
+      return {
+        variant: "outline",
+        className: "border-success/30 bg-success/10 text-success",
+      };
+    case "team":
+      return { variant: "secondary" };
+    case "enterprise":
+      return {
+        variant: "outline",
+        className: "border-warning/30 bg-warning/10 text-warning",
+      };
+    case "api_key":
+      return { variant: "secondary" };
+    case "free":
+    default:
+      return { variant: "outline" };
+  }
+}
+
+function ActiveDot() {
+  return (
+    <span className="relative flex size-2">
+      <span className="bg-success/75 absolute inline-flex size-2 animate-ping rounded-full" />
+      <span className="bg-success relative inline-flex size-2 rounded-full" />
+    </span>
+  );
+}
 
 export function AccountCard({
   account,
@@ -205,7 +216,7 @@ export function AccountCard({
       ? "API Key"
       : null;
 
-  const planVariant = planVariantMap[planKey] ?? planVariantMap.free;
+  const planBadgeProps = getPlanBadgeProps(planKey);
   const showPlanBadge =
     planDisplay !== null &&
     planKey !== "unknown" &&
@@ -218,25 +229,20 @@ export function AccountCard({
   const showSubscriptionStatus = usageEnabled && account.auth_mode === "chat_g_p_t";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
 
+  const cardClassName = cn(
+    "relative gap-0 p-5 transition-all duration-200",
+    account.is_active
+      ? "border-success shadow-sm ring-2 ring-success/40"
+      : "hover:ring-foreground/20"
+  );
+
   if (isLogoutCard) {
     return (
-      <Card
-        className={cn(
-          "relative gap-0 p-5 transition-all duration-200",
-          account.is_active
-            ? "border-emerald-400 shadow-sm"
-            : "hover:border-foreground/20"
-        )}
-      >
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
+      <Card className={cardClassName}>
+        <CardHeader className="mb-3 grid grid-cols-[1fr_auto] gap-3 p-0">
+          <div className="min-w-0">
             <div className="mb-1 flex items-center gap-2">
-              {account.is_active && (
-                <span className="relative flex h-2 w-2">
-                  <span className="bg-emerald-400/75 absolute inline-flex h-2 w-2 animate-ping rounded-full" />
-                  <span className="bg-emerald-500 relative inline-flex h-2 w-2 rounded-full" />
-                </span>
-              )}
+              {account.is_active && <ActiveDot />}
               <h3 className="text-foreground truncate font-semibold">Logout</h3>
             </div>
             <p className="text-muted-foreground truncate text-sm">
@@ -246,14 +252,14 @@ export function AccountCard({
             </p>
           </div>
           <Badge variant="outline" className="rounded-full px-2.5 py-1">
-            <LogOut className="mr-1 size-3" /> Signed out
+            <LogOut data-icon="inline-start" /> Signed out
           </Badge>
-        </div>
+        </CardHeader>
 
-        <div className="flex gap-2">
+        <CardContent className="flex gap-2 p-0">
           {account.is_active ? (
             <Button disabled variant="secondary" className="flex-1">
-              <Check className="size-4" /> Logged out
+              <Check data-icon="inline-start" /> Logged out
             </Button>
           ) : (
             <Tooltip>
@@ -275,29 +281,17 @@ export function AccountCard({
               )}
             </Tooltip>
           )}
-        </div>
+        </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card
-      className={cn(
-        "relative gap-0 p-5 transition-all duration-200",
-        account.is_active
-          ? "border-emerald-400 shadow-sm"
-          : "hover:border-foreground/20"
-      )}
-    >
-      <div className="mb-3 flex items-start justify-between">
-        <div className="min-w-0 flex-1">
+    <Card className={cardClassName}>
+      <CardHeader className="mb-3 grid grid-cols-[1fr_auto] gap-3 p-0">
+        <div className="min-w-0">
           <div className="mb-1 flex items-center gap-2">
-            {account.is_active && (
-              <span className="relative flex h-2 w-2">
-                <span className="bg-emerald-400/75 absolute inline-flex h-2 w-2 animate-ping rounded-full" />
-                <span className="bg-emerald-500 relative inline-flex h-2 w-2 rounded-full" />
-              </span>
-            )}
+            {account.is_active && <ActiveDot />}
             {isEditing ? (
               <Input
                 ref={inputRef}
@@ -335,11 +329,11 @@ export function AccountCard({
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon"
+                  size="icon-sm"
                   onClick={onToggleMask}
-                  className="text-muted-foreground hover:text-foreground h-7 w-7"
+                  className="text-muted-foreground hover:text-foreground"
                 >
-                  {masked ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  {masked ? <EyeOff /> : <Eye />}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>{masked ? "Show info" : "Hide info"}</TooltipContent>
@@ -347,138 +341,133 @@ export function AccountCard({
           )}
           {showPlanBadge && (
             <Badge
-              variant="outline"
-              className={cn("rounded-full px-2.5 py-1", planVariant.className)}
+              variant={planBadgeProps.variant}
+              className={cn("rounded-full px-2.5 py-1", planBadgeProps.className)}
             >
               {planDisplay}
             </Badge>
           )}
         </div>
-      </div>
+      </CardHeader>
 
-      {usageUnsupportedMessage && (
-        <div className="text-muted-foreground mb-3 rounded-md border px-3 py-2 text-sm italic">
-          {usageUnsupportedMessage}
-        </div>
-      )}
-
-      {usageEnabled && !usageUnsupportedMessage && (
-        <div className="mb-3">
-          <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
-        </div>
-      )}
-
-      {usageEnabled && !usageUnsupportedMessage && (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="text-muted-foreground">
-            Last updated: {formatLastRefresh(lastRefresh)}
-          </div>
-          {showSubscriptionStatus && (
-            <div className={cn("text-right", subscriptionStatus.className)}>
-              {subscriptionStatus.label}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="flex gap-2">
-        {account.is_active ? (
-          <Button disabled variant="secondary" className="flex-1">
-            <Check className="size-4" /> Active
-          </Button>
-        ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                onClick={onSwitch}
-                disabled={switching || switchDisabled}
-                className="flex-1"
-              >
-                {switching ? "Switching..." : switchDisabled ? switchDisabledLabel : "Switch"}
-              </Button>
-            </TooltipTrigger>
-            {switchDisabled && (
-              <TooltipContent>{switchDisabledTooltip}</TooltipContent>
-            )}
-          </Tooltip>
+      <CardContent className="flex flex-col gap-3 p-0">
+        {usageUnsupportedMessage && (
+          <Alert>
+            <AlertDescription className="italic">{usageUnsupportedMessage}</AlertDescription>
+          </Alert>
         )}
-        {usageEnabled && !usageUnsupportedMessage && warmupEnabled && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => {
-                  void onWarmup();
-                }}
-                disabled={warmingUp}
-                className={cn(
-                  "border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/30",
-                  warmingUp && "animate-pulse"
-                )}
-              >
-                <Zap className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {warmingUp ? "Sending warm-up request..." : "Send minimal warm-up request"}
-            </TooltipContent>
-          </Tooltip>
-        )}
-        {usageEnabled && !usageUnsupportedMessage && warmupEnabled && onToggleAutoWarmup && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                onClick={onToggleAutoWarmup}
-                disabled={autoWarmupManagedByAll}
-                className={cn(
-                  "whitespace-nowrap",
-                  autoWarmupEnabled &&
-                    "border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
-                )}
-              >
-                {autoWarmupLabel ?? `Auto: ${autoWarmupEnabled ? "on" : "off"}`}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {autoWarmupManagedByAll
-                ? "Auto warm-up is enabled for all accounts"
-                : autoWarmupEnabled
-                  ? "Disable auto warm-up for this account"
-                  : "Enable auto warm-up for this account"}
-            </TooltipContent>
-          </Tooltip>
-        )}
+
         {usageEnabled && !usageUnsupportedMessage && (
+          <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
+        )}
+
+        {usageEnabled && !usageUnsupportedMessage && (
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="text-muted-foreground">
+              Last updated: {formatLastRefresh(lastRefresh)}
+            </div>
+            {showSubscriptionStatus && (
+              <div className={cn("text-right", subscriptionStatus.className)}>
+                {subscriptionStatus.label}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          {account.is_active ? (
+            <Button disabled variant="secondary" className="flex-1">
+              <Check data-icon="inline-start" /> Active
+            </Button>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  onClick={onSwitch}
+                  disabled={switching || switchDisabled}
+                  className="flex-1"
+                >
+                  {switching ? "Switching..." : switchDisabled ? switchDisabledLabel : "Switch"}
+                </Button>
+              </TooltipTrigger>
+              {switchDisabled && (
+                <TooltipContent>{switchDisabledTooltip}</TooltipContent>
+              )}
+            </Tooltip>
+          )}
+          {usageEnabled && !usageUnsupportedMessage && warmupEnabled && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => {
+                    void onWarmup();
+                  }}
+                  disabled={warmingUp}
+                  className={cn(
+                    "border-warning/30 text-warning hover:bg-warning/10",
+                    warmingUp && "animate-pulse"
+                  )}
+                >
+                  <Zap />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {warmingUp ? "Sending warm-up request..." : "Send minimal warm-up request"}
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {usageEnabled && !usageUnsupportedMessage && warmupEnabled && onToggleAutoWarmup && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  onClick={onToggleAutoWarmup}
+                  disabled={autoWarmupManagedByAll}
+                  className={cn(
+                    "whitespace-nowrap",
+                    autoWarmupEnabled &&
+                      "border-success/30 text-success hover:bg-success/10"
+                  )}
+                >
+                  {autoWarmupLabel ?? `Auto: ${autoWarmupEnabled ? "on" : "off"}`}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {autoWarmupManagedByAll
+                  ? "Auto warm-up is enabled for all accounts"
+                  : autoWarmupEnabled
+                    ? "Disable auto warm-up for this account"
+                    : "Enable auto warm-up for this account"}
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {usageEnabled && !usageUnsupportedMessage && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={handleRefresh}
+                  disabled={isRefreshing}
+                >
+                  <RefreshCw className={cn(isRefreshing && "animate-spin")} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Refresh usage</TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-              >
-                <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} />
+              <Button variant="destructive" size="icon" onClick={onDelete}>
+                <Trash2 />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Refresh usage</TooltipContent>
+            <TooltipContent>Remove account</TooltipContent>
           </Tooltip>
-        )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={onDelete}
-              className="border-red-200 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30"
-            >
-              <Trash2 className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Remove account</TooltipContent>
-        </Tooltip>
-      </div>
+        </div>
+      </CardContent>
     </Card>
   );
 }
