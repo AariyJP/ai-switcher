@@ -14,7 +14,7 @@ interface AccountCardProps {
   onSwitch: () => void;
   onWarmup: () => Promise<void>;
   onDelete: () => void;
-  onRefresh: () => Promise<void>;
+  onRefresh: () => Promise<unknown>;
   onRename: (newName: string) => Promise<void>;
   switching?: boolean;
   switchDisabled?: boolean;
@@ -26,6 +26,10 @@ interface AccountCardProps {
   switchDisabledTooltip?: string;
   onToggleMask?: () => void;
   isLogoutCard?: boolean;
+  autoWarmupEnabled?: boolean;
+  autoWarmupManagedByAll?: boolean;
+  autoWarmupLabel?: string;
+  onToggleAutoWarmup?: () => void;
 }
 
 function formatLastRefresh(date: Date | null): string {
@@ -140,6 +144,10 @@ export function AccountCard({
   switchDisabledTooltip = "Close all Codex processes first",
   onToggleMask,
   isLogoutCard = false,
+  autoWarmupEnabled = false,
+  autoWarmupManagedByAll = false,
+  autoWarmupLabel,
+  onToggleAutoWarmup,
 }: AccountCardProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(
@@ -414,6 +422,31 @@ export function AccountCard({
             </TooltipTrigger>
             <TooltipContent>
               {warmingUp ? "Sending warm-up request..." : "Send minimal warm-up request"}
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {usageEnabled && !usageUnsupportedMessage && warmupEnabled && onToggleAutoWarmup && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                onClick={onToggleAutoWarmup}
+                disabled={autoWarmupManagedByAll}
+                className={cn(
+                  "whitespace-nowrap",
+                  autoWarmupEnabled &&
+                    "border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
+                )}
+              >
+                {autoWarmupLabel ?? `Auto: ${autoWarmupEnabled ? "on" : "off"}`}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {autoWarmupManagedByAll
+                ? "Auto warm-up is enabled for all accounts"
+                : autoWarmupEnabled
+                  ? "Disable auto warm-up for this account"
+                  : "Enable auto warm-up for this account"}
             </TooltipContent>
           </Tooltip>
         )}

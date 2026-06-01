@@ -198,6 +198,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
           a.id === accountId ? { ...a, usage, usageLoading: false } : a
         )
       );
+      return usage;
     } catch (err) {
       console.error("Failed to refresh single usage:", err);
       const message = err instanceof Error ? err.message : String(err);
