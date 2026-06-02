@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import {
   describeFileSource,
   isTauriRuntime,
@@ -7,6 +7,7 @@ import {
   pickAuthJsonFile,
   type FileSource,
 } from "../lib/platform";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,7 +16,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ActiveTool } from "../types";
 
@@ -199,15 +202,15 @@ export function AddAccountModal({
   const renderOAuthTab = () => (
     <div className="text-muted-foreground text-sm">
       {oauthPending ? (
-        <div className="py-2 text-center">
-          <Loader2 className="text-foreground mx-auto mb-3 size-8 animate-spin" />
-          <p className="text-foreground mb-2 font-medium">
+        <div className="flex flex-col items-center gap-3 py-2 text-center">
+          <Spinner className="text-foreground size-8" />
+          <p className="text-foreground font-medium">
             Waiting for browser login...
           </p>
-          <p className="text-muted-foreground mb-4 text-xs">
+          <p className="text-muted-foreground text-xs">
             Please open the following link in your browser to proceed:
           </p>
-          <div className="bg-muted border-border mb-2 flex items-center gap-2 rounded-lg border p-2">
+          <div className="bg-muted border-border flex w-full items-center gap-2 rounded-lg border p-2">
             <Input
               type="text"
               readOnly
@@ -237,12 +240,12 @@ export function AddAccountModal({
                 void openExternalUrl(authUrl);
               }}
             >
-              <ExternalLink className="size-3" />
+              <ExternalLink data-icon="inline-start" />
               Open
             </Button>
           </div>
           {!tauriRuntime && (
-            <p className="text-xs text-amber-600">
+            <p className="text-warning text-xs">
               OAuth login must finish on the same host machine because the
               callback redirects to `localhost`.
             </p>
@@ -257,23 +260,24 @@ export function AddAccountModal({
     </div>
   );
 
-  const renderNameInput = () => (
-    <div className="space-y-2">
-      <label className="text-sm font-medium">Account Name</label>
+  const renderNameField = () => (
+    <Field>
+      <FieldLabel htmlFor="account-name">Account Name</FieldLabel>
       <Input
+        id="account-name"
         type="text"
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="e.g., Work Account"
       />
-    </div>
+    </Field>
   );
 
   const renderError = () =>
     error && (
-      <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
-        {error}
-      </div>
+      <Alert variant="destructive">
+        <AlertDescription>{error}</AlertDescription>
+      </Alert>
     );
 
   const primaryAction =
@@ -340,16 +344,16 @@ export function AddAccountModal({
               <TabsTrigger value="import">Import File</TabsTrigger>
             </TabsList>
 
-            <div className="space-y-4 pt-2">
-              {renderNameInput()}
+            <FieldGroup className="pt-2">
+              {renderNameField()}
 
               <TabsContent value="oauth" className="m-0">
                 {renderOAuthTab()}
               </TabsContent>
 
               <TabsContent value="import" className="m-0">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Select auth.json file</label>
+                <Field>
+                  <FieldLabel>Select auth.json file</FieldLabel>
                   <div className="flex gap-2">
                     <div className="bg-muted border-input text-muted-foreground flex-1 truncate rounded-md border px-3 py-2 text-sm">
                       {describeFileSource(fileSource)}
@@ -361,11 +365,11 @@ export function AddAccountModal({
                   <p className="text-muted-foreground text-xs">
                     Import credentials from an existing Codex auth.json file
                   </p>
-                </div>
+                </Field>
               </TabsContent>
 
               {renderError()}
-            </div>
+            </FieldGroup>
           </Tabs>
         ) : activeTool === "claude_code" ? (
           <Tabs
@@ -389,8 +393,8 @@ export function AddAccountModal({
               <TabsTrigger value="import_current">Import Current</TabsTrigger>
             </TabsList>
 
-            <div className="space-y-4 pt-2">
-              {renderNameInput()}
+            <FieldGroup className="pt-2">
+              {renderNameField()}
 
               <TabsContent value="oauth" className="m-0">
                 {renderOAuthTab()}
@@ -403,24 +407,26 @@ export function AddAccountModal({
               </TabsContent>
 
               {renderError()}
-            </div>
+            </FieldGroup>
           </Tabs>
         ) : (
-          <div className="space-y-4 pt-2">
-            {renderNameInput()}
+          <FieldGroup className="pt-2">
+            {renderNameField()}
             <p className="text-muted-foreground text-sm">
               Import the Claude Desktop App login currently active on this
               device. Close Claude Desktop before importing. The app will still
               be closed automatically when you switch accounts.
             </p>
             {isClaudeDesktopImportBlocked && (
-              <p className="text-amber-600 text-sm">
-                Claude Desktop is currently running. Close it before importing
-                this account.
-              </p>
+              <Alert className="border-warning/30 bg-warning/10">
+                <AlertDescription className="text-warning">
+                  Claude Desktop is currently running. Close it before importing
+                  this account.
+                </AlertDescription>
+              </Alert>
             )}
             {renderError()}
-          </div>
+          </FieldGroup>
         )}
 
         <DialogFooter>

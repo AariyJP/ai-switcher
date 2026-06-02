@@ -1,10 +1,9 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Bot,
   ChevronDown,
   Eye,
   EyeOff,
-  Loader2,
   Monitor,
   Moon,
   Plus,
@@ -23,12 +22,14 @@ import {
   type AuthMode,
   type ProcessInfo,
   type ToolKind,
+  type UsageInfo,
 } from "./types";
 import {
   exportFullBackupFile,
   importFullBackupFile,
   invokeBackend,
 } from "./lib/platform";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,12 +47,21 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -60,7 +70,22 @@ import "./App.css";
 
 const THEME_STORAGE_KEY = "ai-switcher-theme";
 const ACTIVE_TOOL_STORAGE_KEY = "ai-switcher-active-tool";
+const AUTO_WARMUP_ALL_STORAGE_KEY = "ai-switcher-auto-warmup-all";
+const AUTO_WARMUP_ACCOUNTS_STORAGE_KEY = "ai-switcher-auto-warmup-accounts";
+const AUTO_WARMUP_LEDGER_STORAGE_KEY = "ai-switcher-auto-warmup-last-success";
+const AUTO_WARMUP_CHECK_INTERVAL_MS = 30 * 1000;
+const AUTO_WARMUP_RETRY_BACKOFF_MS = 5 * 60 * 1000;
+const AUTO_WARMUP_MIN_SUCCESS_INTERVAL_MS = 60 * 60 * 1000;
+const AUTO_WARMUP_FULL_WINDOW_SLACK_MINUTES = 5;
+const DEFAULT_PRIMARY_WINDOW_MINUTES = 300;
+const LIMIT_FULL_THRESHOLD = 99.5;
 type ThemeMode = "light" | "dark" | "system";
+type AutoWarmupLedger = Record<
+  string,
+  {
+    lastSuccessfulWarmupAt?: number;
+  }
+>;
 
 const ACTIVE_TOOL_TO_BACKEND: Record<
   ActiveTool,
@@ -77,6 +102,83 @@ type SortKey =
   | "remaining_asc"
   | "subscription_asc"
   | "subscription_desc";
+
+function readStoredStringArray(key: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function readStoredAutoWarmupLedger(): AutoWarmupLedger {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(AUTO_WARMUP_LEDGER_STORAGE_KEY) ?? "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([accountId, value]) => {
+          const timestamp =
+            value &&
+            typeof value === "object" &&
+            "lastSuccessfulWarmupAt" in value &&
+            typeof value.lastSuccessfulWarmupAt === "number"
+              ? value.lastSuccessfulWarmupAt
+              : undefined;
+          return timestamp ? [accountId, { lastSuccessfulWarmupAt: timestamp }] : null;
+        })
+        .filter((entry): entry is [string, { lastSuccessfulWarmupAt: number }] => Boolean(entry))
+    );
+  } catch {
+    return {};
+  }
+}
+
+function isLimitFull(usedPercent: number | null | undefined): boolean {
+  return usedPercent !== null && usedPercent !== undefined && usedPercent >= LIMIT_FULL_THRESHOLD;
+}
+
+function getPrimaryWindowMinutes(usage: UsageInfo): number {
+  return usage.primary_window_minutes ?? DEFAULT_PRIMARY_WINDOW_MINUTES;
+}
+
+function getPrimaryRemainingMs(usage: UsageInfo): number | null {
+  if (!usage.primary_resets_at) return null;
+  return usage.primary_resets_at * 1000 - Date.now();
+}
+
+function isPrimaryFullWindow(usage: UsageInfo): boolean {
+  const remainingMs = getPrimaryRemainingMs(usage);
+  if (remainingMs === null) return false;
+
+  const thresholdMinutes = Math.max(
+    0,
+    getPrimaryWindowMinutes(usage) - AUTO_WARMUP_FULL_WINDOW_SLACK_MINUTES
+  );
+  return remainingMs >= thresholdMinutes * 60 * 1000;
+}
+
+function getLastSuccessfulWarmupAt(
+  ledger: AutoWarmupLedger,
+  accountId: string
+): number | undefined {
+  return ledger[accountId]?.lastSuccessfulWarmupAt;
+}
+
+// Process-status badge palette using semantic success/warning tokens.
+function processBadgeClass(isRunning: boolean) {
+  return isRunning
+    ? "border-warning/30 bg-warning/10 text-warning"
+    : "border-success/30 bg-success/10 text-success";
+}
+
+function processDotClass(isRunning: boolean) {
+  return isRunning ? "bg-warning" : "bg-success";
+}
 
 function App() {
   const [activeTool, setActiveTool] = useState<ActiveTool>(() => {
@@ -143,6 +245,18 @@ function App() {
   const [isImportingFull, setIsImportingFull] = useState(false);
   const [isWarmingAll, setIsWarmingAll] = useState(false);
   const [warmingUpId, setWarmingUpId] = useState<string | null>(null);
+  const [autoWarmupAllEnabled, setAutoWarmupAllEnabled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(AUTO_WARMUP_ALL_STORAGE_KEY) === "true";
+  });
+  const [autoWarmupAccountIds, setAutoWarmupAccountIds] = useState<Set<string>>(
+    () => new Set(readStoredStringArray(AUTO_WARMUP_ACCOUNTS_STORAGE_KEY))
+  );
+  const [autoWarmupLedger, setAutoWarmupLedger] =
+    useState<AutoWarmupLedger>(() => readStoredAutoWarmupLedger());
+  const [autoWarmupRunningIds, setAutoWarmupRunningIds] = useState<Set<string>>(
+    new Set()
+  );
   const [maskedAccounts, setMaskedAccounts] = useState<Set<string>>(new Set());
   const [otherAccountsSort, setOtherAccountsSort] = useState<SortKey>("deadline_asc");
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
@@ -162,6 +276,82 @@ function App() {
       // Ignore storage errors; tab still works for current session.
     }
   }, [activeTool]);
+
+  const accountsRef = useRef(accounts);
+  const autoWarmupAccountIdsRef = useRef(autoWarmupAccountIds);
+  const autoWarmupLedgerRef = useRef(autoWarmupLedger);
+  const autoWarmupRunningIdsRef = useRef(autoWarmupRunningIds);
+  const autoWarmupRetryAfterRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    accountsRef.current = accounts;
+  }, [accounts]);
+
+  useEffect(() => {
+    autoWarmupAccountIdsRef.current = autoWarmupAccountIds;
+  }, [autoWarmupAccountIds]);
+
+  useEffect(() => {
+    autoWarmupRunningIdsRef.current = autoWarmupRunningIds;
+  }, [autoWarmupRunningIds]);
+
+  useEffect(() => {
+    if (loading || error) return;
+
+    const validAccountIds = new Set(accounts.map((account) => account.id));
+
+    setAutoWarmupAccountIds((prev) => {
+      const next = new Set(Array.from(prev).filter((id) => validAccountIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+
+    setAutoWarmupLedger((prev) => {
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([accountId]) => validAccountIds.has(accountId))
+      );
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+
+    for (const accountId of Object.keys(autoWarmupRetryAfterRef.current)) {
+      if (!validAccountIds.has(accountId)) {
+        delete autoWarmupRetryAfterRef.current[accountId];
+      }
+    }
+  }, [accounts, error, loading]);
+
+  useEffect(() => {
+    autoWarmupLedgerRef.current = autoWarmupLedger;
+    try {
+      window.localStorage.setItem(
+        AUTO_WARMUP_LEDGER_STORAGE_KEY,
+        JSON.stringify(autoWarmupLedger)
+      );
+    } catch {
+      // Ignore storage errors; auto warm-up still works for the current session.
+    }
+  }, [autoWarmupLedger]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        AUTO_WARMUP_ALL_STORAGE_KEY,
+        String(autoWarmupAllEnabled)
+      );
+    } catch {
+      // Ignore storage errors; auto warm-up still works for the current session.
+    }
+  }, [autoWarmupAllEnabled]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        AUTO_WARMUP_ACCOUNTS_STORAGE_KEY,
+        JSON.stringify(Array.from(autoWarmupAccountIds))
+      );
+    } catch {
+      // Ignore storage errors; auto warm-up still works for the current session.
+    }
+  }, [autoWarmupAccountIds]);
 
   const toggleMask = (accountId: string) => {
     setMaskedAccounts((prev) => {
@@ -302,7 +492,15 @@ function App() {
     }
   };
 
-  const formatWarmupError = (err: unknown) => {
+  const showWarmupToast = useCallback((message: string, isError = false) => {
+    if (isError) {
+      toast.error(message);
+    } else {
+      toast.success(message);
+    }
+  }, []);
+
+  const formatWarmupError = useCallback((err: unknown) => {
     if (!err) return "Unknown error";
     if (err instanceof Error && err.message) return err.message;
     if (typeof err === "string") return err;
@@ -311,12 +509,20 @@ function App() {
     } catch {
       return "Unknown error";
     }
-  };
+  }, []);
+
+  const markSuccessfulWarmup = useCallback((accountId: string, timestamp = Date.now()) => {
+    setAutoWarmupLedger((prev) => ({
+      ...prev,
+      [accountId]: { lastSuccessfulWarmupAt: timestamp },
+    }));
+  }, []);
 
   const handleWarmupAccount = async (accountId: string, accountName: string) => {
     try {
       setWarmingUpId(accountId);
       await warmupAccount(accountId);
+      markSuccessfulWarmup(accountId);
       toast.success(`Warm-up sent for ${accountName}`);
     } catch (err) {
       console.error("Failed to warm up account:", err);
@@ -334,6 +540,14 @@ function App() {
         toast.error("No accounts available for warm-up");
         return;
       }
+
+      const warmedAt = Date.now();
+      const failedAccountIds = new Set(summary.failed_account_ids);
+      accounts.forEach((account) => {
+        if (!failedAccountIds.has(account.id)) {
+          markSuccessfulWarmup(account.id, warmedAt);
+        }
+      });
 
       if (summary.failed_account_ids.length === 0) {
         toast.success(
@@ -353,6 +567,154 @@ function App() {
       setIsWarmingAll(false);
     }
   };
+
+  const toggleAutoWarmupAccount = (accountId: string) => {
+    setAutoWarmupAccountIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(accountId)) {
+        next.delete(accountId);
+      } else {
+        next.add(accountId);
+      }
+      return next;
+    });
+  };
+
+  const isAutoWarmupDue = useCallback(
+    (accountId: string, usage: UsageInfo | undefined) => {
+      if (!usage || usage.error || !usage.primary_resets_at) return false;
+      if (isLimitFull(usage.secondary_used_percent)) return false;
+      if (!isPrimaryFullWindow(usage)) return false;
+
+      const lastSuccessfulWarmupAt = getLastSuccessfulWarmupAt(
+        autoWarmupLedgerRef.current,
+        accountId
+      );
+      if (
+        lastSuccessfulWarmupAt &&
+        Date.now() - lastSuccessfulWarmupAt < AUTO_WARMUP_MIN_SUCCESS_INTERVAL_MS
+      ) {
+        return false;
+      }
+
+      return true;
+    },
+    []
+  );
+
+  const getAutoWarmupLabel = useCallback(
+    (
+      usage: UsageInfo | undefined,
+      isEnabled: boolean,
+      isRunning: boolean
+    ) => {
+      if (isRunning) return "Warming...";
+      if (!isEnabled) return "Auto: off";
+      if (!usage || usage.error || !usage.primary_resets_at) return "Auto: on";
+
+      if (isLimitFull(usage.secondary_used_percent)) {
+        return "Waiting weekly reset";
+      }
+
+      return "Auto: on";
+    },
+    []
+  );
+
+  const headerAutoWarmupLabel = useMemo(() => {
+    if (autoWarmupRunningIds.size > 0) return "Auto warming...";
+    return autoWarmupAllEnabled || autoWarmupAccountIds.size > 0
+      ? "Auto: on"
+      : "Auto: off";
+  }, [autoWarmupAccountIds.size, autoWarmupAllEnabled, autoWarmupRunningIds]);
+
+  const backOffAutoWarmupRetry = useCallback((accountId: string) => {
+    autoWarmupRetryAfterRef.current[accountId] =
+      Date.now() + AUTO_WARMUP_RETRY_BACKOFF_MS;
+  }, []);
+
+  const runAutoWarmupForAccount = useCallback(
+    async (accountId: string, accountName: string) => {
+      setAutoWarmupRunningIds((prev) => new Set(prev).add(accountId));
+
+      try {
+        let freshUsage: UsageInfo | undefined;
+        try {
+          freshUsage = await refreshSingleUsage(accountId);
+        } catch (err) {
+          console.error("Auto warm-up usage refresh failed:", err);
+          backOffAutoWarmupRetry(accountId);
+          return;
+        }
+
+        if (!freshUsage || freshUsage.error || !freshUsage.primary_resets_at) {
+          backOffAutoWarmupRetry(accountId);
+          return;
+        }
+        if (!isAutoWarmupDue(accountId, freshUsage)) {
+          return;
+        }
+
+        await warmupAccount(accountId);
+        markSuccessfulWarmup(accountId);
+        showWarmupToast(`Auto warm-up sent for ${accountName}`);
+      } catch (err) {
+        console.error("Auto warm-up failed:", err);
+        backOffAutoWarmupRetry(accountId);
+        showWarmupToast(
+          `Auto warm-up failed for ${accountName}: ${formatWarmupError(err)}`,
+          true
+        );
+      } finally {
+        setAutoWarmupRunningIds((prev) => {
+          const next = new Set(prev);
+          next.delete(accountId);
+          return next;
+        });
+      }
+    },
+    [
+      backOffAutoWarmupRetry,
+      formatWarmupError,
+      isAutoWarmupDue,
+      markSuccessfulWarmup,
+      refreshSingleUsage,
+      showWarmupToast,
+      warmupAccount,
+    ]
+  );
+
+  useEffect(() => {
+    if (!autoWarmupAllEnabled && autoWarmupAccountIds.size === 0) return;
+
+    const checkAutoWarmup = () => {
+      for (const account of accountsRef.current) {
+        const autoEnabled =
+          autoWarmupAllEnabled || autoWarmupAccountIdsRef.current.has(account.id);
+        if (!autoEnabled || autoWarmupRunningIdsRef.current.has(account.id)) continue;
+
+        const retryAfter = autoWarmupRetryAfterRef.current[account.id];
+        if (retryAfter && Date.now() < retryAfter) continue;
+
+        if (!isAutoWarmupDue(account.id, account.usage)) continue;
+
+        void runAutoWarmupForAccount(account.id, account.name);
+      }
+    };
+
+    checkAutoWarmup();
+    const interval = window.setInterval(
+      checkAutoWarmup,
+      AUTO_WARMUP_CHECK_INTERVAL_MS
+    );
+
+    return () => window.clearInterval(interval);
+  }, [
+    autoWarmupAccountIds.size,
+    autoWarmupAllEnabled,
+    isAutoWarmupDue,
+    runAutoWarmupForAccount,
+  ]);
 
   const handleExportSlimText = async () => {
     setConfigModalMode("slim_export");
@@ -606,16 +968,12 @@ function App() {
                   {codexProcessInfo && (
                     <Badge
                       variant="outline"
-                      className={cn(
-                        hasRunningCodex
-                          ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-                          : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                      )}
+                      className={processBadgeClass(hasRunningCodex)}
                     >
                       <span
                         className={cn(
                           "inline-block size-1.5 rounded-full",
-                          hasRunningCodex ? "bg-amber-500" : "bg-emerald-500"
+                          processDotClass(hasRunningCodex)
                         )}
                       />
                       {codexProcessInfo.count} Codex running
@@ -624,16 +982,12 @@ function App() {
                   {claudeProcessInfo && (
                     <Badge
                       variant="outline"
-                      className={cn(
-                        hasRunningClaude
-                          ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-                          : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                      )}
+                      className={processBadgeClass(hasRunningClaude)}
                     >
                       <span
                         className={cn(
                           "inline-block size-1.5 rounded-full",
-                          hasRunningClaude ? "bg-amber-500" : "bg-emerald-500"
+                          processDotClass(hasRunningClaude)
                         )}
                       />
                       {claudeProcessInfo.count} Claude running
@@ -647,7 +1001,7 @@ function App() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="outline" size="icon" onClick={toggleMaskAll}>
-                    {allMasked ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                    {allMasked ? <EyeOff /> : <Eye />}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -664,7 +1018,7 @@ function App() {
                     onClick={handleRefresh}
                     disabled={isRefreshing}
                   >
-                    <RefreshCw className={cn("size-4", isRefreshing && "animate-spin")} />
+                    <RefreshCw className={cn(isRefreshing && "animate-spin")} />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -680,16 +1034,39 @@ function App() {
                       onClick={handleWarmupAll}
                       disabled={isWarmingAll || accounts.length === 0}
                     >
-                      <Zap className={cn("size-4", isWarmingAll && "animate-pulse")} />
+                      <Zap className={cn(isWarmingAll && "animate-pulse")} />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Send minimal traffic using all accounts</TooltipContent>
                 </Tooltip>
               )}
+              {warmupEnabled && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      onClick={() => setAutoWarmupAllEnabled((prev) => !prev)}
+                      disabled={accounts.length === 0}
+                      className={cn(
+                        "whitespace-nowrap",
+                        autoWarmupAllEnabled &&
+                          "border-success/30 text-success hover:bg-success/10"
+                      )}
+                    >
+                      {headerAutoWarmupLabel}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {autoWarmupAllEnabled
+                      ? "Disable auto warm-up for all accounts"
+                      : "Enable auto warm-up for all accounts"}
+                  </TooltipContent>
+                </Tooltip>
+              )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="outline" size="icon" onClick={cycleTheme}>
-                    <ThemeIcon className="size-4" />
+                    <ThemeIcon />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{themeTitle}</TooltipContent>
@@ -699,7 +1076,7 @@ function App() {
                 <DropdownMenuTrigger asChild>
                   <Button>
                     Account
-                    <ChevronDown className="size-4" />
+                    <ChevronDown data-icon="inline-end" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
@@ -709,7 +1086,7 @@ function App() {
                       setIsAddModalOpen(true);
                     }}
                   >
-                    <Plus className="size-4" />
+                    <Plus />
                     Add Account
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
@@ -765,45 +1142,45 @@ function App() {
 
       <main className="mx-auto max-w-5xl px-6 py-8">
         {loading && accountsWithLogout.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20">
-            <Loader2 className="text-foreground mb-4 size-10 animate-spin" />
+          <div className="flex flex-col items-center justify-center gap-4 py-20">
+            <Spinner className="text-foreground size-10" />
             <p className="text-muted-foreground">Loading accounts...</p>
           </div>
         ) : error ? (
-          <div className="py-20 text-center">
-            <div className="text-destructive mb-2">Failed to load accounts</div>
-            <p className="text-muted-foreground text-sm">{error}</p>
-          </div>
+          <Alert variant="destructive" className="mx-auto max-w-md">
+            <AlertTitle>Failed to load accounts</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         ) : accountsWithLogout.length === 0 ? (
-          <div className="py-20 text-center">
-            <div className="bg-muted mx-auto mb-4 flex size-16 items-center justify-center rounded-2xl">
-              {activeTool === "codex" ? (
-                <User className="text-muted-foreground size-8" />
-              ) : (
-                <Bot className="text-muted-foreground size-8" />
-              )}
-            </div>
-            <h2 className="text-foreground mb-2 text-xl font-semibold">No accounts yet</h2>
-            <p className="text-muted-foreground mb-6">
-              Add your first{" "}
-              {activeTool === "codex"
-                ? "Codex"
-                : activeTool === "claude_code"
-                  ? "Claude Code"
-                  : "Claude Desktop"}{" "}
-              account to get started
-            </p>
-            <Button
-              onClick={() => {
-                void checkProcesses();
-                setIsAddModalOpen(true);
-              }}
-            >
-              Add Account
-            </Button>
-          </div>
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                {activeTool === "codex" ? <User /> : <Bot />}
+              </EmptyMedia>
+              <EmptyTitle>No accounts yet</EmptyTitle>
+              <EmptyDescription>
+                Add your first{" "}
+                {activeTool === "codex"
+                  ? "Codex"
+                  : activeTool === "claude_code"
+                    ? "Claude Code"
+                    : "Claude Desktop"}{" "}
+                account to get started
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button
+                onClick={() => {
+                  void checkProcesses();
+                  setIsAddModalOpen(true);
+                }}
+              >
+                Add Account
+              </Button>
+            </EmptyContent>
+          </Empty>
         ) : (
-          <div className="space-y-8">
+          <div className="flex flex-col gap-8">
             {activeAccount && (
               <section>
                 <h2 className="text-muted-foreground mb-4 text-sm font-medium uppercase tracking-wider">
@@ -824,7 +1201,11 @@ function App() {
                   switchDisabled={hasRunningActiveTool}
                   switchDisabledLabel={switchDisabledLabel}
                   switchDisabledTooltip={switchDisabledTooltip}
-                  warmingUp={isWarmingAll || warmingUpId === activeAccount.id}
+                  warmingUp={
+                    isWarmingAll ||
+                    warmingUpId === activeAccount.id ||
+                    autoWarmupRunningIds.has(activeAccount.id)
+                  }
                   masked={maskedAccounts.has(activeAccount.id)}
                   usageEnabled={
                     usageEnabled && activeAccount.id !== LOGOUT_CARD_ID
@@ -836,6 +1217,20 @@ function App() {
                       : () => toggleMask(activeAccount.id)
                   }
                   isLogoutCard={activeAccount.id === LOGOUT_CARD_ID}
+                  autoWarmupEnabled={
+                    autoWarmupAllEnabled || autoWarmupAccountIds.has(activeAccount.id)
+                  }
+                  autoWarmupManagedByAll={autoWarmupAllEnabled}
+                  autoWarmupLabel={getAutoWarmupLabel(
+                    activeAccount.usage,
+                    autoWarmupAllEnabled || autoWarmupAccountIds.has(activeAccount.id),
+                    autoWarmupRunningIds.has(activeAccount.id)
+                  )}
+                  onToggleAutoWarmup={
+                    warmupEnabled && activeAccount.id !== LOGOUT_CARD_ID
+                      ? () => toggleAutoWarmupAccount(activeAccount.id)
+                      : undefined
+                  }
                 />
               </section>
             )}
@@ -898,7 +1293,11 @@ function App() {
                         switchDisabled={hasRunningActiveTool}
                         switchDisabledLabel={switchDisabledLabel}
                         switchDisabledTooltip={switchDisabledTooltip}
-                        warmingUp={isWarmingAll || warmingUpId === account.id}
+                        warmingUp={
+                          isWarmingAll ||
+                          warmingUpId === account.id ||
+                          autoWarmupRunningIds.has(account.id)
+                        }
                         masked={maskedAccounts.has(account.id)}
                         usageEnabled={usageEnabled && !isLogout}
                         warmupEnabled={warmupEnabled}
@@ -906,6 +1305,20 @@ function App() {
                           isLogout ? undefined : () => toggleMask(account.id)
                         }
                         isLogoutCard={isLogout}
+                        autoWarmupEnabled={
+                          autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id)
+                        }
+                        autoWarmupManagedByAll={autoWarmupAllEnabled}
+                        autoWarmupLabel={getAutoWarmupLabel(
+                          account.usage,
+                          autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id),
+                          autoWarmupRunningIds.has(account.id)
+                        )}
+                        onToggleAutoWarmup={
+                          warmupEnabled && !isLogout
+                            ? () => toggleAutoWarmupAccount(account.id)
+                            : undefined
+                        }
                       />
                     );
                   })}
@@ -943,11 +1356,13 @@ function App() {
             </DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="flex flex-col gap-4">
             {configModalMode === "slim_import" ? (
-              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-200">
-                Existing accounts are kept. Only missing accounts are imported.
-              </p>
+              <Alert className="border-warning/30 bg-warning/10">
+                <AlertDescription className="text-warning">
+                  Existing accounts are kept. Only missing accounts are imported.
+                </AlertDescription>
+              </Alert>
             ) : (
               <p className="text-muted-foreground text-sm">
                 This slim string contains account secrets. Keep it private.
@@ -967,9 +1382,9 @@ function App() {
               className="h-48 font-mono"
             />
             {configModalError && (
-              <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
-                {configModalError}
-              </div>
+              <Alert variant="destructive">
+                <AlertDescription>{configModalError}</AlertDescription>
+              </Alert>
             )}
           </div>
 
