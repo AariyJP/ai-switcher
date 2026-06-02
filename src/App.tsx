@@ -12,7 +12,8 @@ import {
   User,
   Zap,
 } from "lucide-react";
-import { toast, Toaster } from "sonner";
+import { toast } from "sonner";
+import { Toaster } from "@/components/ui/sonner";
 import { useAccounts } from "./hooks/useAccounts";
 import { AccountCard, AddAccountModal, TitleBar } from "./components";
 import {
@@ -169,11 +170,9 @@ function getLastSuccessfulWarmupAt(
   return ledger[accountId]?.lastSuccessfulWarmupAt;
 }
 
-// Process-status badge palette using semantic success/warning tokens.
-function processBadgeClass(isRunning: boolean) {
-  return isRunning
-    ? "border-warning/30 bg-warning/10 text-warning"
-    : "border-success/30 bg-success/10 text-success";
+// Process-status badge variant using semantic success/warning tokens.
+function processBadgeVariant(isRunning: boolean): "warning" | "success" {
+  return isRunning ? "warning" : "success";
 }
 
 function processDotClass(isRunning: boolean) {
@@ -966,10 +965,7 @@ function App() {
                     AI Switcher
                   </h1>
                   {codexProcessInfo && (
-                    <Badge
-                      variant="outline"
-                      className={processBadgeClass(hasRunningCodex)}
-                    >
+                    <Badge variant={processBadgeVariant(hasRunningCodex)}>
                       <span
                         className={cn(
                           "inline-block size-1.5 rounded-full",
@@ -980,10 +976,7 @@ function App() {
                     </Badge>
                   )}
                   {claudeProcessInfo && (
-                    <Badge
-                      variant="outline"
-                      className={processBadgeClass(hasRunningClaude)}
-                    >
+                    <Badge variant={processBadgeVariant(hasRunningClaude)}>
                       <span
                         className={cn(
                           "inline-block size-1.5 rounded-full",
@@ -1000,7 +993,12 @@ function App() {
             <div className="flex shrink-0 flex-wrap items-center gap-2 md:ml-4 md:w-max md:flex-nowrap md:justify-end">
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="outline" size="icon" onClick={toggleMaskAll}>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={toggleMaskAll}
+                    aria-label={allMasked ? "Show all account names and emails" : "Hide all account names and emails"}
+                  >
                     {allMasked ? <EyeOff /> : <Eye />}
                   </Button>
                 </TooltipTrigger>
@@ -1017,6 +1015,7 @@ function App() {
                     size="icon"
                     onClick={handleRefresh}
                     disabled={isRefreshing}
+                    aria-label={isRefreshing ? "Refreshing all usage" : "Refresh all usage"}
                   >
                     <RefreshCw className={cn(isRefreshing && "animate-spin")} />
                   </Button>
@@ -1033,6 +1032,7 @@ function App() {
                       size="icon"
                       onClick={handleWarmupAll}
                       disabled={isWarmingAll || accounts.length === 0}
+                      aria-label="Send minimal traffic using all accounts"
                     >
                       <Zap className={cn(isWarmingAll && "animate-pulse")} />
                     </Button>
@@ -1044,14 +1044,10 @@ function App() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      variant="outline"
+                      variant={autoWarmupAllEnabled ? "success" : "outline"}
                       onClick={() => setAutoWarmupAllEnabled((prev) => !prev)}
                       disabled={accounts.length === 0}
-                      className={cn(
-                        "whitespace-nowrap",
-                        autoWarmupAllEnabled &&
-                          "border-success/30 text-success hover:bg-success/10"
-                      )}
+                      className="whitespace-nowrap"
                     >
                       {headerAutoWarmupLabel}
                     </Button>
@@ -1065,7 +1061,7 @@ function App() {
               )}
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="outline" size="icon" onClick={cycleTheme}>
+                  <Button variant="outline" size="icon" onClick={cycleTheme} aria-label={themeTitle}>
                     <ThemeIcon />
                   </Button>
                 </TooltipTrigger>
@@ -1347,7 +1343,7 @@ function App() {
 
       <Dialog
         open={isConfigModalOpen}
-        onOpenChange={(open) => setIsConfigModalOpen(open)}
+        onOpenChange={setIsConfigModalOpen}
       >
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
@@ -1358,8 +1354,8 @@ function App() {
 
           <div className="flex flex-col gap-4">
             {configModalMode === "slim_import" ? (
-              <Alert className="border-warning/30 bg-warning/10">
-                <AlertDescription className="text-warning">
+              <Alert variant="warning">
+                <AlertDescription>
                   Existing accounts are kept. Only missing accounts are imported.
                 </AlertDescription>
               </Alert>

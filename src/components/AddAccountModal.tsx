@@ -355,9 +355,13 @@ export function AddAccountModal({
                 <Field>
                   <FieldLabel>Select auth.json file</FieldLabel>
                   <div className="flex gap-2">
-                    <div className="bg-muted border-input text-muted-foreground flex-1 truncate rounded-md border px-3 py-2 text-sm">
-                      {describeFileSource(fileSource)}
-                    </div>
+                    <Input
+                      readOnly
+                      tabIndex={-1}
+                      className="flex-1 cursor-default"
+                      value={describeFileSource(fileSource)}
+                      onChange={() => {}}
+                    />
                     <Button variant="outline" onClick={handleSelectFile}>
                       Browse...
                     </Button>
@@ -418,8 +422,8 @@ export function AddAccountModal({
               be closed automatically when you switch accounts.
             </p>
             {isClaudeDesktopImportBlocked && (
-              <Alert className="border-warning/30 bg-warning/10">
-                <AlertDescription className="text-warning">
+              <Alert variant="warning">
+                <AlertDescription>
                   Claude Desktop is currently running. Close it before importing
                   this account.
                 </AlertDescription>
