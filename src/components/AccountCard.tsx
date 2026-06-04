@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Check, Eye, EyeOff, LogOut, RefreshCw, Trash2, Zap } from "lucide-react";
+import { Check, Eye, EyeOff, RefreshCw, Trash2, Zap } from "lucide-react";
 import type { AccountWithUsage } from "../types";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +26,6 @@ interface AccountCardProps {
   switchDisabledLabel?: string;
   switchDisabledTooltip?: string;
   onToggleMask?: () => void;
-  isLogoutCard?: boolean;
   autoWarmupEnabled?: boolean;
   autoWarmupManagedByAll?: boolean;
   autoWarmupLabel?: string;
@@ -141,7 +140,6 @@ export function AccountCard({
   switchDisabledLabel = "Codex Running",
   switchDisabledTooltip = "Close all Codex processes first",
   onToggleMask,
-  isLogoutCard = false,
   autoWarmupEnabled = false,
   autoWarmupManagedByAll = false,
   autoWarmupLabel,
@@ -222,58 +220,6 @@ export function AccountCard({
       ? "border-success shadow-sm ring-2 ring-success/40"
       : "hover:ring-foreground/20"
   );
-
-  if (isLogoutCard) {
-    return (
-      <Card className={cardClassName}>
-        <CardHeader className="mb-3 gap-3 p-0">
-          <div className="min-w-0">
-            <div className="mb-1 flex items-center gap-2">
-              {account.is_active && <ActiveDot />}
-              <h3 className="text-foreground truncate font-semibold">Logout</h3>
-            </div>
-            <p className="text-muted-foreground truncate text-sm">
-              Clear the current Claude Desktop login without revoking saved
-              accounts. Open Claude Desktop afterwards to sign in with a new
-              account.
-            </p>
-          </div>
-          <CardAction>
-            <Badge variant="outline" className="rounded-full px-2.5 py-1">
-              <LogOut data-icon="inline-start" /> Signed out
-            </Badge>
-          </CardAction>
-        </CardHeader>
-
-        <CardContent className="flex gap-2 p-0">
-          {account.is_active ? (
-            <Button disabled variant="secondary" className="flex-1">
-              <Check data-icon="inline-start" /> Logged out
-            </Button>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  onClick={onSwitch}
-                  disabled={switching || switchDisabled}
-                  className="flex-1"
-                >
-                  {switching
-                    ? "Logging out..."
-                    : switchDisabled
-                      ? switchDisabledLabel
-                      : "Logout"}
-                </Button>
-              </TooltipTrigger>
-              {switchDisabled && (
-                <TooltipContent>{switchDisabledTooltip}</TooltipContent>
-              )}
-            </Tooltip>
-          )}
-        </CardContent>
-      </Card>
-    );
-  }
 
   return (
     <Card className={cardClassName}>

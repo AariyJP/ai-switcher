@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Bot,
+  Check,
   ChevronDown,
   Eye,
   EyeOff,
+  LogOut,
   Monitor,
   Moon,
   Plus,
@@ -17,8 +19,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { useAccounts } from "./hooks/useAccounts";
 import { AccountCard, AddAccountModal, TitleBar } from "./components";
 import {
-  LOGOUT_CARD_ID,
-  type AccountWithUsage,
   type ActiveTool,
   type AuthMode,
   type ProcessInfo,
@@ -33,6 +33,13 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -219,7 +226,7 @@ function App() {
     startClaudeOAuthLogin,
     completeClaudeOAuthLogin,
     cancelClaudeOAuthLogin,
-    logoutClaudeDesktop,
+    logoutCurrent,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
   } = useAccounts(backendTarget.tool, backendTarget.authMode);
@@ -233,6 +240,7 @@ function App() {
   const [configModalError, setConfigModalError] = useState<string | null>(null);
   const [configCopied, setConfigCopied] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [processInfoByTool, setProcessInfoByTool] = useState<
     Record<ToolKind, ProcessInfo | null>
@@ -449,12 +457,7 @@ function App() {
 
     try {
       setSwitchingId(accountId);
-      if (accountId === LOGOUT_CARD_ID) {
-        await logoutClaudeDesktop();
-        toast.success("Logged out of Claude Desktop");
-      } else {
-        await switchAccount(accountId);
-      }
+      await switchAccount(accountId);
     } catch (err) {
       console.error("Failed to switch account:", err);
       toast.error(
@@ -462,6 +465,24 @@ function App() {
       );
     } finally {
       setSwitchingId(null);
+    }
+  };
+
+  const handleLogout = async () => {
+    const latest = await checkProcesses();
+    if (latest && !latest[backendTarget.tool].can_switch) {
+      return;
+    }
+
+    try {
+      setIsLoggingOut(true);
+      await logoutCurrent();
+      toast.success(`Logged out of ${activeToolLabel}`);
+    } catch (err) {
+      console.error("Failed to log out:", err);
+      toast.error(err instanceof Error ? err.message : "Failed to log out");
+    } finally {
+      setIsLoggingOut(false);
     }
   };
 
@@ -804,30 +825,8 @@ function App() {
     }
   };
 
-  const logoutCard = useMemo<AccountWithUsage | null>(() => {
-    if (activeTool !== "claude_desktop") return null;
-    const anyRealActive = accounts.some((a) => a.is_active);
-    return {
-      id: LOGOUT_CARD_ID,
-      name: "Logout",
-      email: null,
-      plan_type: null,
-      subscription_expires_at: null,
-      tool: "claude",
-      auth_mode: "claude_desktop",
-      is_active: !anyRealActive,
-      created_at: new Date(0).toISOString(),
-      last_used_at: null,
-    };
-  }, [activeTool, accounts]);
-
-  const accountsWithLogout = useMemo<AccountWithUsage[]>(
-    () => (logoutCard ? [...accounts, logoutCard] : accounts),
-    [accounts, logoutCard]
-  );
-
-  const activeAccount = accountsWithLogout.find((a) => a.is_active);
-  const otherAccounts = accountsWithLogout.filter((a) => !a.is_active);
+  const activeAccount = accounts.find((a) => a.is_active);
+  const otherAccounts = accounts.filter((a) => !a.is_active);
   const codexProcessInfo = processInfoByTool.codex;
   const claudeProcessInfo = processInfoByTool.claude;
   const hasRunningCodex = !!codexProcessInfo && codexProcessInfo.count > 0;
@@ -836,6 +835,12 @@ function App() {
   const warmupEnabled = activeTool === "codex";
   const hasRunningActiveTool =
     activeTool === "codex" ? hasRunningCodex : hasRunningClaude;
+  const activeToolLabel =
+    activeTool === "codex"
+      ? "Codex"
+      : activeTool === "claude_code"
+        ? "Claude Code"
+        : "Claude Desktop";
   const switchDisabledLabel =
     activeTool === "codex" ? "Codex Running" : "Claude Running";
   const switchDisabledTooltip =
@@ -845,11 +850,7 @@ function App() {
 
   const sortedOtherAccounts = useMemo(() => {
     if (activeTool !== "codex") {
-      return [...otherAccounts].sort((a, b) => {
-        if (a.id === LOGOUT_CARD_ID) return 1;
-        if (b.id === LOGOUT_CARD_ID) return -1;
-        return a.name.localeCompare(b.name);
-      });
+      return [...otherAccounts].sort((a, b) => a.name.localeCompare(b.name));
     }
 
     const getResetDeadline = (resetAt: number | null | undefined) =>
@@ -1137,7 +1138,7 @@ function App() {
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-8">
-        {loading && accountsWithLogout.length === 0 ? (
+        {loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-4 py-20">
             <Spinner className="text-foreground size-10" />
             <p className="text-muted-foreground">Loading accounts...</p>
@@ -1147,7 +1148,7 @@ function App() {
             <AlertTitle>Failed to load accounts</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
           </Alert>
-        ) : accountsWithLogout.length === 0 ? (
+        ) : accounts.length === 0 ? (
           <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon">
@@ -1203,16 +1204,9 @@ function App() {
                     autoWarmupRunningIds.has(activeAccount.id)
                   }
                   masked={maskedAccounts.has(activeAccount.id)}
-                  usageEnabled={
-                    usageEnabled && activeAccount.id !== LOGOUT_CARD_ID
-                  }
+                  usageEnabled={usageEnabled}
                   warmupEnabled={warmupEnabled}
-                  onToggleMask={
-                    activeAccount.id === LOGOUT_CARD_ID
-                      ? undefined
-                      : () => toggleMask(activeAccount.id)
-                  }
-                  isLogoutCard={activeAccount.id === LOGOUT_CARD_ID}
+                  onToggleMask={() => toggleMask(activeAccount.id)}
                   autoWarmupEnabled={
                     autoWarmupAllEnabled || autoWarmupAccountIds.has(activeAccount.id)
                   }
@@ -1223,7 +1217,7 @@ function App() {
                     autoWarmupRunningIds.has(activeAccount.id)
                   )}
                   onToggleAutoWarmup={
-                    warmupEnabled && activeAccount.id !== LOGOUT_CARD_ID
+                    warmupEnabled
                       ? () => toggleAutoWarmupAccount(activeAccount.id)
                       : undefined
                   }
@@ -1272,56 +1266,96 @@ function App() {
                   )}
                 </div>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {sortedOtherAccounts.map((account) => {
-                    const isLogout = account.id === LOGOUT_CARD_ID;
-                    return (
-                      <AccountCard
-                        key={account.id}
-                        account={account}
-                        onSwitch={() => handleSwitch(account.id)}
-                        onWarmup={() => handleWarmupAccount(account.id, account.name)}
-                        onDelete={() => handleDelete(account.id)}
-                        onRefresh={() =>
-                          refreshSingleUsage(account.id, { refreshMetadata: true })
-                        }
-                        onRename={(newName) => renameAccount(account.id, newName)}
-                        switching={switchingId === account.id}
-                        switchDisabled={hasRunningActiveTool}
-                        switchDisabledLabel={switchDisabledLabel}
-                        switchDisabledTooltip={switchDisabledTooltip}
-                        warmingUp={
-                          isWarmingAll ||
-                          warmingUpId === account.id ||
-                          autoWarmupRunningIds.has(account.id)
-                        }
-                        masked={maskedAccounts.has(account.id)}
-                        usageEnabled={usageEnabled && !isLogout}
-                        warmupEnabled={warmupEnabled}
-                        onToggleMask={
-                          isLogout ? undefined : () => toggleMask(account.id)
-                        }
-                        isLogoutCard={isLogout}
-                        autoWarmupEnabled={
-                          autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id)
-                        }
-                        autoWarmupManagedByAll={autoWarmupAllEnabled}
-                        autoWarmupLabel={getAutoWarmupLabel(
-                          account.usage,
-                          autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id),
-                          autoWarmupRunningIds.has(account.id)
-                        )}
-                        onToggleAutoWarmup={
-                          warmupEnabled && !isLogout
-                            ? () => toggleAutoWarmupAccount(account.id)
-                            : undefined
-                        }
-                      />
-                    );
-                  })}
+                  {sortedOtherAccounts.map((account) => (
+                    <AccountCard
+                      key={account.id}
+                      account={account}
+                      onSwitch={() => handleSwitch(account.id)}
+                      onWarmup={() => handleWarmupAccount(account.id, account.name)}
+                      onDelete={() => handleDelete(account.id)}
+                      onRefresh={() =>
+                        refreshSingleUsage(account.id, { refreshMetadata: true })
+                      }
+                      onRename={(newName) => renameAccount(account.id, newName)}
+                      switching={switchingId === account.id}
+                      switchDisabled={hasRunningActiveTool}
+                      switchDisabledLabel={switchDisabledLabel}
+                      switchDisabledTooltip={switchDisabledTooltip}
+                      warmingUp={
+                        isWarmingAll ||
+                        warmingUpId === account.id ||
+                        autoWarmupRunningIds.has(account.id)
+                      }
+                      masked={maskedAccounts.has(account.id)}
+                      usageEnabled={usageEnabled}
+                      warmupEnabled={warmupEnabled}
+                      onToggleMask={() => toggleMask(account.id)}
+                      autoWarmupEnabled={
+                        autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id)
+                      }
+                      autoWarmupManagedByAll={autoWarmupAllEnabled}
+                      autoWarmupLabel={getAutoWarmupLabel(
+                        account.usage,
+                        autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id),
+                        autoWarmupRunningIds.has(account.id)
+                      )}
+                      onToggleAutoWarmup={
+                        warmupEnabled
+                          ? () => toggleAutoWarmupAccount(account.id)
+                          : undefined
+                      }
+                    />
+                  ))}
                 </div>
               </section>
             )}
           </div>
+        )}
+
+        {!error && !(loading && accounts.length === 0) && (
+          <section className="mt-8">
+            <h2 className="text-muted-foreground mb-4 text-sm font-medium uppercase tracking-wider">
+              Other Options
+            </h2>
+            <Card>
+              <CardHeader>
+                <CardTitle>Log out of {activeToolLabel}</CardTitle>
+                <CardDescription>
+                  Clear the current {activeToolLabel} login on this machine.
+                  Saved accounts and their tokens are kept.
+                </CardDescription>
+                <CardAction>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        onClick={handleLogout}
+                        disabled={
+                          isLoggingOut || hasRunningActiveTool || !activeAccount
+                        }
+                      >
+                        {!activeAccount && !isLoggingOut ? (
+                          <Check data-icon="inline-start" />
+                        ) : (
+                          <LogOut data-icon="inline-start" />
+                        )}
+                        {isLoggingOut
+                          ? "Logging out..."
+                          : !activeAccount
+                            ? "Logged out"
+                            : hasRunningActiveTool
+                              ? switchDisabledLabel
+                              : "Log out"}
+                      </Button>
+                    </TooltipTrigger>
+                    {hasRunningActiveTool && activeAccount && (
+                      <TooltipContent>{switchDisabledTooltip}</TooltipContent>
+                    )}
+                  </Tooltip>
+                </CardAction>
+              </CardHeader>
+            </Card>
+          </section>
         )}
       </main>
 
