@@ -4,7 +4,10 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::{stream, StreamExt};
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT},
+    header::{
+        HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, REFERER,
+        USER_AGENT,
+    },
     StatusCode,
 };
 use serde::Deserialize;
@@ -16,8 +19,8 @@ use crate::auth::{
     refresh_claude_tokens, sync_active_claude_account_credentials,
 };
 use crate::types::{
-    AuthData, ClaudeCredential, CreditStatusDetails, RateLimitDetails, RateLimitStatusPayload,
-    RateLimitWindow, StoredAccount, UsageInfo,
+    AuthData, ClaudeCredential, ClaudeDesktopSession, CreditStatusDetails, RateLimitDetails,
+    RateLimitStatusPayload, RateLimitWindow, StoredAccount, UsageInfo,
 };
 
 const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
@@ -29,6 +32,8 @@ const CODEX_USER_AGENT: &str = "codex-cli/1.0.0";
 const CLAUDE_API: &str = "https://api.anthropic.com/api";
 const CLAUDE_USER_AGENT: &str = "claude-code/2.1.142";
 const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
+const CLAUDE_AI_API: &str = "https://claude.ai/api";
+const CLAUDE_DESKTOP_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 
 #[derive(Debug, Clone)]
 pub struct ChatGptAccountMetadata {
@@ -281,10 +286,114 @@ async fn parse_usage_response(
 }
 
 async fn get_usage_with_claude_desktop_auth(account: &StoredAccount) -> Result<UsageInfo> {
-    Ok(UsageInfo::error(
-        account.id.clone(),
-        "Usage is currently not supported for Claude Desktop accounts.".to_string(),
-    ))
+    let AuthData::ClaudeDesktop { session, .. } = &account.auth_data else {
+        anyhow::bail!("Account is not a Claude Desktop account");
+    };
+
+    let org_uuid = session
+        .org_uuid
+        .clone()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            session
+                .cookies
+                .iter()
+                .find(|cookie| cookie.name == "lastActiveOrg")
+                .map(|cookie| cookie.value.clone())
+                .filter(|value| !value.is_empty())
+        })
+        .context(
+            "Claude Desktop account is missing its organization id. Re-import the account from Claude Desktop.",
+        )?;
+
+    let response = send_claude_desktop_usage_request(session, &org_uuid).await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        println!("[Usage] Claude Desktop error response: {body}");
+        let message = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            "Claude Desktop session expired or was blocked. Open Claude Desktop, sign in, then re-import this account.".to_string()
+        } else {
+            format!("Claude Desktop usage API error: {status}")
+        };
+        return Ok(UsageInfo::error(account.id.clone(), message));
+    }
+
+    let body_text = response
+        .text()
+        .await
+        .context("Failed to read Claude Desktop usage response body")?;
+    println!(
+        "[Usage] Claude Desktop response body: {}",
+        &body_text[..body_text.len().min(200)]
+    );
+
+    let payload: Value = serde_json::from_str(&body_text)
+        .context("Failed to parse Claude Desktop usage response")?;
+    let usage = convert_claude_payload_to_usage_info(account, account.plan_type.clone(), &payload);
+    println!(
+        "[Usage] {} - Claude Desktop primary: {:?}%, plan: {:?}",
+        account.name, usage.primary_used_percent, usage.plan_type
+    );
+
+    Ok(usage)
+}
+
+async fn send_claude_desktop_usage_request(
+    session: &ClaudeDesktopSession,
+    org_uuid: &str,
+) -> Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    let url = format!("{CLAUDE_AI_API}/organizations/{org_uuid}/usage");
+
+    let mut headers = HeaderMap::new();
+    headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(USER_AGENT, HeaderValue::from_static(CLAUDE_DESKTOP_USER_AGENT));
+    headers.insert(REFERER, HeaderValue::from_static("https://claude.ai/"));
+    headers.insert(
+        HeaderName::from_static("anthropic-client-platform"),
+        HeaderValue::from_static("web_claude_ai"),
+    );
+    headers.insert(
+        HeaderName::from_static("anthropic-client-version"),
+        HeaderValue::from_static("1.0.0"),
+    );
+    if let Some(device_id) = session.device_id.as_deref().filter(|s| !s.is_empty()) {
+        if let Ok(value) = HeaderValue::from_str(device_id) {
+            headers.insert(HeaderName::from_static("anthropic-device-id"), value);
+        }
+    }
+    if let Ok(cookie_header) = HeaderValue::from_str(&build_cookie_header(session)) {
+        headers.insert(COOKIE, cookie_header);
+    }
+
+    println!("[Usage] Requesting Claude Desktop usage: {url}");
+
+    client
+        .get(&url)
+        .headers(headers)
+        .send()
+        .await
+        .with_context(|| format!("Failed to send Claude Desktop usage request to {url}"))
+}
+
+fn build_cookie_header(session: &ClaudeDesktopSession) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut parts = Vec::new();
+    for cookie in &session.cookies {
+        if cookie.name.is_empty() || cookie.value.is_empty() {
+            continue;
+        }
+        if !seen.insert(cookie.name.as_str()) {
+            continue;
+        }
+        parts.push(format!("{}={}", cookie.name, cookie.value));
+    }
+    if !seen.contains("sessionKey") && !session.session_key.is_empty() {
+        parts.push(format!("sessionKey={}", session.session_key));
+    }
+    parts.join("; ")
 }
 
 async fn parse_claude_usage_response(
@@ -315,7 +424,7 @@ async fn parse_claude_usage_response(
 
     let payload: Value =
         serde_json::from_str(&body_text).context("Failed to parse Claude usage response")?;
-    let usage = convert_claude_payload_to_usage_info(account, oauth, &payload);
+    let usage = convert_claude_payload_to_usage_info(account, oauth.subscription_type, &payload);
     println!(
         "[Usage] {} - Claude primary: {:?}%, plan: {:?}",
         account.name, usage.primary_used_percent, usage.plan_type
@@ -673,7 +782,7 @@ fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPaylo
 
 fn convert_claude_payload_to_usage_info(
     account: &StoredAccount,
-    oauth: ClaudeOauthCredentials,
+    plan_type: Option<String>,
     payload: &Value,
 ) -> UsageInfo {
     let primary = extract_claude_limit(payload, "five_hour");
@@ -697,8 +806,7 @@ fn convert_claude_payload_to_usage_info(
 
     UsageInfo {
         account_id: account.id.clone(),
-        plan_type: oauth
-            .subscription_type
+        plan_type: plan_type
             .or_else(|| account.plan_type.clone())
             .or_else(|| Some("claude".to_string())),
         primary_used_percent: primary.as_ref().map(|limit| limit.used_percent),

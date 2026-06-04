@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { Check, Eye, EyeOff, RefreshCw, Trash2, Zap } from "lucide-react";
 import type { AccountWithUsage } from "../types";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
@@ -207,10 +206,6 @@ export function AccountCard({
     planKey !== "unknown" &&
     account.auth_mode !== "claude_desktop" &&
     !(account.auth_mode === "claude_code" && planKey === "code");
-  const usageUnsupportedMessage =
-    account.auth_mode === "claude_desktop"
-      ? "Usage is currently not supported for Claude Desktop accounts."
-      : null;
   const showSubscriptionStatus = usageEnabled && account.auth_mode === "chat_g_p_t";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
 
@@ -284,17 +279,11 @@ export function AccountCard({
       </CardHeader>
 
       <CardContent className="flex flex-col gap-3 p-0">
-        {usageUnsupportedMessage && (
-          <Alert>
-            <AlertDescription className="italic">{usageUnsupportedMessage}</AlertDescription>
-          </Alert>
-        )}
-
-        {usageEnabled && !usageUnsupportedMessage && (
+        {usageEnabled && (
           <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
         )}
 
-        {usageEnabled && !usageUnsupportedMessage && (
+        {usageEnabled && (
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <div className="text-muted-foreground">
               Last updated: {formatLastRefresh(lastRefresh)}
@@ -328,7 +317,7 @@ export function AccountCard({
               )}
             </Tooltip>
           )}
-          {usageEnabled && !usageUnsupportedMessage && warmupEnabled && (
+          {usageEnabled && warmupEnabled && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -349,7 +338,7 @@ export function AccountCard({
               </TooltipContent>
             </Tooltip>
           )}
-          {usageEnabled && !usageUnsupportedMessage && warmupEnabled && onToggleAutoWarmup && (
+          {usageEnabled && warmupEnabled && onToggleAutoWarmup && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -370,7 +359,7 @@ export function AccountCard({
               </TooltipContent>
             </Tooltip>
           )}
-          {usageEnabled && !usageUnsupportedMessage && (
+          {usageEnabled && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button

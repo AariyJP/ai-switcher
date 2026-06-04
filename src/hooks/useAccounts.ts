@@ -103,7 +103,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     ) => {
       try {
         let list = accountList ?? accountsRef.current;
-        if (list.length === 0 || authMode === "claude_desktop") {
+        if (list.length === 0) {
           return;
         }
 
@@ -177,10 +177,6 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     options?: { refreshMetadata?: boolean }
   ) => {
     try {
-      if (authMode === "claude_desktop") {
-        return;
-      }
-
       if (options?.refreshMetadata && tool === "codex") {
         await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
         await loadAccounts(true);
