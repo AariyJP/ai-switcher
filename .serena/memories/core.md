@@ -1,6 +1,6 @@
 # ai-switcher プロジェクト概要
 
-複数の AI CLI アカウントを管理する Tauri 2 デスクトップアプリ。正式名称は **AI Switcher**。crate は `ai-switcher`、identifier は `ai-switcher.ai-switcher`。もともとは Codex CLI 向けだったが、現在は Claude Code のアカウント切り替えにも対応している。ローカルの checkout ディレクトリ名は `ac-switcher` のままの場合がある。
+複数の AI CLI アカウントを管理する Tauri 2 デスクトップアプリ。正式名称は **AI Switcher**。crate は `ai-switcher`、identifier は `ai-switcher.ai-switcher`。もともとは Codex CLI 向けだったが、現在は Claude Code と Claude Desktop のアカウント切り替えにも対応している。ローカルの checkout ディレクトリ名は `ac-switcher` のままの場合がある。
 
 ## 構成
 
@@ -19,9 +19,11 @@
 - アプリ名関連の文字列は `Cargo.toml`、`package.json`、`tauri*.conf.json`、scripts 全体で `ai-switcher` / `AI Switcher` / `ai-switcher.ai-switcher` に揃える。気軽に rename しない。release tooling と bundle path が依存している。
 - バージョンは Tauri / Cargo / frontend で同期する。変更は `pnpm version:bump` を使う。詳細は `mem:suggested_commands`。
 - フロントエンドは Tauri `invoke` 経由でバックエンドと通信する。web/LAN mode の `ai-web` は同じ handler を `/api/invoke/*` として再公開する。
+- updater plugin の Cargo 依存は upstream に寄せるため残すが、この fork では runtime 登録しない。署名鍵と配布元が fork 用に整うまでは updater 機能を有効化しない。
 
 ## 関連 memory
 
+- 初回の作業入口、設計、注意点、よく使うコマンド: `mem:working_guide`
 - 技術スタック: `mem:tech_stack`
 - コマンド: `mem:suggested_commands`
 - コード規約: `mem:conventions`
