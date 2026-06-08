@@ -73,6 +73,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import "./App.css";
 
@@ -571,9 +572,7 @@ function App() {
 
       if (summary.failed_account_ids.length === 0) {
         toast.success(
-          `Warm-up sent for all ${summary.warmed_accounts} account${
-            summary.warmed_accounts === 1 ? "" : "s"
-          }`
+          `Warm-up sent for all ${summary.warmed_accounts} ${pluralize(summary.warmed_accounts, "account")}`
         );
       } else {
         toast.error(
