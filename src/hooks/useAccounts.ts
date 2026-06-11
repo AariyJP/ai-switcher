@@ -8,7 +8,7 @@ import type {
   ImportAccountsSummary,
   ToolKind,
 } from "../types";
-import { invokeBackend, type FileSource } from "../lib/platform";
+import { invokeBackend, isTauriRuntime, type FileSource } from "../lib/platform";
 
 export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
   const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);
@@ -497,6 +497,29 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
       refreshUsage(accountList);
     });
   }, [loadAccounts, refreshUsage, toolKey]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    void (async () => {
+      if (!isTauriRuntime()) return;
+      const { listen } = await import("@tauri-apps/api/event");
+      const fn = await listen("accounts-changed", () => {
+        void loadAccounts(true);
+      });
+      if (cancelled) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    })();
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [loadAccounts]);
 
   return {
     accounts,

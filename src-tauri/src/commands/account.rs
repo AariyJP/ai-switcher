@@ -1,6 +1,6 @@
 //! Account management Tauri commands
 
-use super::process::check_processes;
+use super::process::{check_processes, ensure_codex_not_running};
 use crate::auth::{
     add_account, create_chatgpt_account_from_refresh_token, import_current_claude_account,
     import_current_claude_desktop_account, import_from_auth_json, import_from_auth_json_contents,
@@ -180,6 +180,10 @@ pub async fn add_claude_desktop_account_from_current(name: String) -> Result<Acc
 /// Switch to a different account
 #[tauri::command]
 pub async fn switch_account(account_id: String) -> Result<(), String> {
+    switch_account_by_id(&account_id)
+}
+
+pub fn switch_account_by_id(account_id: &str) -> Result<(), String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
 
     // Find the account
@@ -190,6 +194,9 @@ pub async fn switch_account(account_id: String) -> Result<(), String> {
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
     let tool = account.tool;
+    if tool == ToolKind::Codex {
+        ensure_codex_not_running()?;
+    }
 
     match &account.auth_data {
         AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {
@@ -205,10 +212,10 @@ pub async fn switch_account(account_id: String) -> Result<(), String> {
     }
 
     // Update the active account in our store
-    set_active_account(&account_id).map_err(|e| e.to_string())?;
+    set_active_account(account_id).map_err(|e| e.to_string())?;
 
     // Update last_used_at
-    touch_account(&account_id).map_err(|e| e.to_string())?;
+    touch_account(account_id).map_err(|e| e.to_string())?;
 
     // Restart Antigravity background process if it is running
     // This allows it to pick up the new authorization file seamlessly

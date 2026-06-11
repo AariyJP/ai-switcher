@@ -3,6 +3,8 @@
 pub mod api;
 pub mod auth;
 pub mod commands;
+#[cfg(desktop)]
+pub mod tray;
 pub mod types;
 pub mod web;
 
@@ -15,9 +17,9 @@ use commands::{
     delete_account,
     export_accounts_full_encrypted_file, export_accounts_slim_text, get_active_account_info,
     get_masked_account_ids, get_usage, import_accounts_full_encrypted_file,
-    import_accounts_slim_text, list_accounts, refresh_account_metadata, refresh_all_accounts_usage,
-    rename_account, set_masked_account_ids, start_claude_login, start_login, switch_account,
-    warmup_account, warmup_all_accounts,
+    import_accounts_slim_text, kill_codex_processes, list_accounts, refresh_account_metadata,
+    refresh_all_accounts_usage, rename_account, set_masked_account_ids, start_claude_login,
+    start_login, switch_account, warmup_account, warmup_all_accounts,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -26,11 +28,25 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
-        .setup(|_| {
+        .setup(|app| {
             discord::start_discord_presence();
+            #[cfg(desktop)]
+            {
+                tray::setup(app.handle())?;
+            }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            #[cfg(desktop)]
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            commands::open_codex_app,
             // Account management
             list_accounts,
             get_active_account_info,
@@ -65,6 +81,7 @@ pub fn run() {
             warmup_all_accounts,
             // Process detection
             check_processes,
+            kill_codex_processes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

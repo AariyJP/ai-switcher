@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { useAccounts } from "./hooks/useAccounts";
+import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
 import { AccountCard, AddAccountModal, TitleBar } from "./components";
 import {
   type ActiveTool,
@@ -29,8 +30,19 @@ import {
   exportFullBackupFile,
   importFullBackupFile,
   invokeBackend,
+  isTauriRuntime,
 } from "./lib/platform";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -88,7 +100,12 @@ const AUTO_WARMUP_MIN_SUCCESS_INTERVAL_MS = 60 * 60 * 1000;
 const AUTO_WARMUP_FULL_WINDOW_SLACK_MINUTES = 5;
 const DEFAULT_PRIMARY_WINDOW_MINUTES = 300;
 const LIMIT_FULL_THRESHOLD = 99.5;
+const SWITCH_ACCOUNT_BLOCKED_EVENT = "switch-account-blocked";
 type ThemeMode = "light" | "dark" | "system";
+interface SwitchAccountBlockedPayload {
+  accountId?: string;
+  error?: string;
+}
 type AutoWarmupLedger = Record<
   string,
   {
@@ -246,7 +263,9 @@ function App() {
   const [processInfoByTool, setProcessInfoByTool] = useState<
     Record<ToolKind, ProcessInfo | null>
   >({ codex: null, claude: null });
+  const [pendingTraySwitchAccountId, setPendingTraySwitchAccountId] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isOpeningCodex, setIsOpeningCodex] = useState(false);
   const [isExportingSlim, setIsExportingSlim] = useState(false);
   const [isImportingSlim, setIsImportingSlim] = useState(false);
   const [isExportingFull, setIsExportingFull] = useState(false);
@@ -290,6 +309,7 @@ function App() {
   const autoWarmupLedgerRef = useRef(autoWarmupLedger);
   const autoWarmupRunningIdsRef = useRef(autoWarmupRunningIds);
   const autoWarmupRetryAfterRef = useRef<Record<string, number>>({});
+  const openCodexCheckTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     accountsRef.current = accounts;
@@ -302,6 +322,15 @@ function App() {
   useEffect(() => {
     autoWarmupRunningIdsRef.current = autoWarmupRunningIds;
   }, [autoWarmupRunningIds]);
+
+  useEffect(
+    () => () => {
+      if (openCodexCheckTimeoutRef.current !== null) {
+        window.clearTimeout(openCodexCheckTimeoutRef.current);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (loading || error) return;
@@ -532,12 +561,117 @@ function App() {
     }
   }, []);
 
+  const checkCodexProcesses = useCallback(async () => {
+    const latest = await checkProcesses();
+    return latest?.codex ?? null;
+  }, [checkProcesses]);
+
   const markSuccessfulWarmup = useCallback((accountId: string, timestamp = Date.now()) => {
     setAutoWarmupLedger((prev) => ({
       ...prev,
       [accountId]: { lastSuccessfulWarmupAt: timestamp },
     }));
   }, []);
+
+  const {
+    forceCloseConfirmOpen,
+    setForceCloseConfirmOpen,
+    isForceClosingCodex,
+    forceCloseCodexProcesses,
+  } = useForceCloseCodexProcesses({
+    checkProcesses: checkCodexProcesses,
+    showToast: showWarmupToast,
+    formatError: formatWarmupError,
+  });
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    void (async () => {
+      if (!isTauriRuntime()) return;
+      const { listen } = await import("@tauri-apps/api/event");
+      const fn = await listen<SwitchAccountBlockedPayload>(
+        SWITCH_ACCOUNT_BLOCKED_EVENT,
+        async (event) => {
+          const latestProcessInfo = await checkProcesses();
+          const accountId = event.payload?.accountId;
+
+          if (accountId && latestProcessInfo && !latestProcessInfo.codex.can_switch) {
+            setPendingTraySwitchAccountId(accountId);
+            setForceCloseConfirmOpen(true);
+            return;
+          }
+
+          if (accountId && latestProcessInfo?.codex.can_switch) {
+            try {
+              setSwitchingId(accountId);
+              await switchAccount(accountId);
+              setPendingTraySwitchAccountId(null);
+              showWarmupToast("Switched account from tray.");
+            } catch (err) {
+              console.error("Failed to retry tray account switch:", err);
+              showWarmupToast(`Switch failed: ${formatWarmupError(err)}`, true);
+            } finally {
+              setSwitchingId(null);
+            }
+            return;
+          }
+
+          showWarmupToast(
+            event.payload?.error || "Account switch was blocked.",
+            true
+          );
+        }
+      );
+      if (cancelled) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    })();
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [checkProcesses, formatWarmupError, setForceCloseConfirmOpen, showWarmupToast, switchAccount]);
+
+  const handleForceCloseConfirm = useCallback(async () => {
+    const accountId = pendingTraySwitchAccountId;
+    const latestProcessInfo = await forceCloseCodexProcesses();
+
+    if (!accountId) {
+      return;
+    }
+
+    if (!latestProcessInfo?.can_switch) {
+      setPendingTraySwitchAccountId(null);
+      return;
+    }
+
+    try {
+      setSwitchingId(accountId);
+      await switchAccount(accountId);
+      setPendingTraySwitchAccountId(null);
+      showWarmupToast("Switched account after force closing Codex.");
+    } catch (err) {
+      console.error("Failed to switch account after force close:", err);
+      setPendingTraySwitchAccountId(null);
+      showWarmupToast(
+        `Switch failed after force close: ${formatWarmupError(err)}`,
+        true
+      );
+    } finally {
+      setSwitchingId(null);
+    }
+  }, [
+    forceCloseCodexProcesses,
+    formatWarmupError,
+    pendingTraySwitchAccountId,
+    showWarmupToast,
+    switchAccount,
+  ]);
 
   const handleWarmupAccount = async (accountId: string, accountName: string) => {
     try {
@@ -824,11 +958,32 @@ function App() {
     }
   };
 
+  const handleOpenCodexApp = useCallback(async () => {
+    try {
+      setIsOpeningCodex(true);
+      await invokeBackend("open_codex_app");
+      showWarmupToast("Codex app opened.");
+      if (openCodexCheckTimeoutRef.current !== null) {
+        window.clearTimeout(openCodexCheckTimeoutRef.current);
+      }
+      openCodexCheckTimeoutRef.current = window.setTimeout(() => {
+        openCodexCheckTimeoutRef.current = null;
+        void checkProcesses();
+      }, 1500);
+    } catch (err) {
+      console.error("Failed to open Codex app:", err);
+      showWarmupToast(`Open Codex failed: ${formatWarmupError(err)}`, true);
+    } finally {
+      setIsOpeningCodex(false);
+    }
+  }, [checkProcesses, formatWarmupError, showWarmupToast]);
+
   const activeAccount = accounts.find((a) => a.is_active);
   const otherAccounts = accounts.filter((a) => !a.is_active);
   const codexProcessInfo = processInfoByTool.codex;
   const claudeProcessInfo = processInfoByTool.claude;
   const hasRunningCodex = !!codexProcessInfo && codexProcessInfo.count > 0;
+  const codexProcessCount = codexProcessInfo?.count ?? 0;
   const hasRunningClaude = !!claudeProcessInfo && claudeProcessInfo.count > 0;
   const usageEnabled = true;
   const warmupEnabled = activeTool === "codex";
@@ -846,6 +1001,13 @@ function App() {
     activeTool === "codex"
       ? "Close all Codex processes first"
       : "Close all Claude processes first";
+  const pendingTraySwitchAccount = useMemo(
+    () => accounts.find((account) => account.id === pendingTraySwitchAccountId),
+    [accounts, pendingTraySwitchAccountId]
+  );
+  const forceCloseConfirmLabel = pendingTraySwitchAccount
+    ? "Force close and switch account"
+    : "Force close running Codex processes";
 
   const sortedOtherAccounts = useMemo(() => {
     if (activeTool !== "codex") {
@@ -974,6 +1136,29 @@ function App() {
                       />
                       {codexProcessInfo.count} Codex running
                     </Badge>
+                  )}
+                  {hasRunningCodex && (
+                    <Button
+                      variant="destructive"
+                      size="xs"
+                      onClick={() => {
+                        setPendingTraySwitchAccountId(null);
+                        setForceCloseConfirmOpen(true);
+                      }}
+                      disabled={isForceClosingCodex}
+                    >
+                      Force close
+                    </Button>
+                  )}
+                  {isTauriRuntime() && codexProcessInfo && !hasRunningCodex && (
+                    <Button
+                      variant="success"
+                      size="xs"
+                      onClick={handleOpenCodexApp}
+                      disabled={isOpeningCodex}
+                    >
+                      {isOpeningCodex ? "Opening..." : "Open Codex"}
+                    </Button>
                   )}
                   {claudeProcessInfo && (
                     <Badge variant={processBadgeVariant(hasRunningClaude)}>
@@ -1357,6 +1542,71 @@ function App() {
           </section>
         )}
       </main>
+
+      <AlertDialog
+        open={forceCloseConfirmOpen}
+        onOpenChange={(open) => {
+          if (isForceClosingCodex && !open) {
+            return;
+          }
+          if (!open) {
+            setPendingTraySwitchAccountId(null);
+          }
+          setForceCloseConfirmOpen(open);
+        }}
+      >
+        <AlertDialogContent
+          onEscapeKeyDown={(event) => {
+            if (isForceClosingCodex) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Force close running Codex processes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will force close {codexProcessCount}{" "}
+              {pluralize(codexProcessCount, "Codex process", "Codex processes")} that currently
+              block account switching.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex flex-col gap-3">
+            {pendingTraySwitchAccount && (
+              <p className="text-muted-foreground text-sm">
+                After closing Codex, AI Switcher will switch to{" "}
+                <span className="text-foreground font-medium">
+                  {pendingTraySwitchAccount.name}
+                </span>
+                .
+              </p>
+            )}
+            <Alert variant="destructive">
+              <AlertDescription>Unsaved Codex work may be lost.</AlertDescription>
+            </Alert>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setPendingTraySwitchAccountId(null);
+                setForceCloseConfirmOpen(false);
+              }}
+              disabled={isForceClosingCodex}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={(event) => {
+                event.preventDefault();
+                void handleForceCloseConfirm();
+              }}
+              disabled={isForceClosingCodex}
+            >
+              {isForceClosingCodex ? "Force closing..." : forceCloseConfirmLabel}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AddAccountModal
         isOpen={isAddModalOpen}

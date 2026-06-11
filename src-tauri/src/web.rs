@@ -14,11 +14,10 @@ use crate::commands::{
     add_claude_desktop_account_from_current, cancel_claude_login, cancel_login, check_processes,
     claude_code_logout, claude_desktop_logout, codex_logout, complete_claude_login, complete_login,
     delete_account, export_accounts_full_encrypted_bytes, export_accounts_slim_text,
-    get_active_account_info,
-    get_masked_account_ids, get_usage, import_accounts_full_encrypted_bytes,
-    import_accounts_slim_text, list_accounts, refresh_account_metadata, refresh_all_accounts_usage,
-    rename_account, set_masked_account_ids, start_claude_login, start_login, switch_account,
-    warmup_account, warmup_all_accounts,
+    get_active_account_info, get_masked_account_ids, get_usage, import_accounts_full_encrypted_bytes,
+    import_accounts_slim_text, kill_codex_processes, list_accounts, refresh_account_metadata,
+    refresh_all_accounts_usage, rename_account, set_masked_account_ids, start_claude_login,
+    start_login, switch_account, warmup_account, warmup_all_accounts,
 };
 use crate::types::{AuthMode, ToolKind};
 
@@ -237,7 +236,8 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             }
             let args: CheckProcessesArgs = parse_args(payload)?;
             to_json(check_processes(args.tool).await?)
-        }
+        },
+        "kill_codex_processes" => to_json(kill_codex_processes().await?),
         _ => Err(format!("Unsupported web command: {command}")),
     }
 }
