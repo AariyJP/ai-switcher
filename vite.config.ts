@@ -9,6 +9,16 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
+  // Two HTML entries: the main app window and the system tray popup window.
+  build: {
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        tray: "tray.html",
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

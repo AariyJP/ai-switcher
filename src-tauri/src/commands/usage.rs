@@ -8,14 +8,27 @@ use crate::auth::{get_account, load_accounts, refresh_chatgpt_tokens, update_acc
 use crate::types::{AccountInfo, AuthData, UsageInfo, WarmupSummary};
 use futures::{stream, StreamExt};
 
-/// Get usage info for a specific account
-#[tauri::command]
-pub async fn get_usage(account_id: String) -> Result<UsageInfo, String> {
-    let account = get_account(&account_id)
+/// Fetch usage info for a specific account (shared by the Tauri command and web mode).
+pub async fn fetch_usage(account_id: &str) -> Result<UsageInfo, String> {
+    let account = get_account(account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
     get_account_usage(&account).await.map_err(|e| e.to_string())
+}
+
+/// Get usage info for a specific account
+#[tauri::command]
+pub async fn get_usage(app: tauri::AppHandle, account_id: String) -> Result<UsageInfo, String> {
+    let usage = fetch_usage(&account_id).await?;
+
+    // Keep the tray menu/title in sync with whichever UI fetched fresh usage.
+    #[cfg(desktop)]
+    crate::tray::ingest_usage(&app, vec![usage.clone()]);
+    #[cfg(not(desktop))]
+    let _ = app;
+
+    Ok(usage)
 }
 
 /// Force-refresh account metadata for a specific account.

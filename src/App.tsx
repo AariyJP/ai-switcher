@@ -10,9 +10,15 @@ import {
   isTauriRuntime,
   invokeBackend,
 } from "./lib/platform";
+import {
+  applyTheme,
+  readStoredTheme,
+  THEME_CHANGED_EVENT,
+  THEME_STORAGE_KEY,
+  type ThemeMode,
+} from "./lib/theme";
 import "./App.css";
 
-const THEME_STORAGE_KEY = "codex-switcher-theme";
 const AUTO_WARMUP_ALL_STORAGE_KEY = "codex-switcher-auto-warmup-all";
 const AUTO_WARMUP_ACCOUNTS_STORAGE_KEY = "codex-switcher-auto-warmup-accounts";
 const AUTO_WARMUP_LEDGER_STORAGE_KEY = "codex-switcher-auto-warmup-last-success";
@@ -23,7 +29,6 @@ const AUTO_WARMUP_FULL_WINDOW_SLACK_MINUTES = 5;
 const DEFAULT_PRIMARY_WINDOW_MINUTES = 300;
 const LIMIT_FULL_THRESHOLD = 99.5;
 const SWITCH_ACCOUNT_BLOCKED_EVENT = "switch-account-blocked";
-type ThemeMode = "light" | "dark";
 interface SwitchAccountBlockedPayload {
   accountId?: string;
   error?: string;
@@ -176,15 +181,7 @@ function App() {
   >("deadline_asc");
   const [isActionsMenuOpen, setIsActionsMenuOpen] = useState(false);
   const actionsMenuRef = useRef<HTMLDivElement | null>(null);
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
-    if (typeof window === "undefined") return "light";
-    try {
-      const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
-      return saved === "dark" ? "dark" : "light";
-    } catch {
-      return "light";
-    }
-  });
+  const [themeMode, setThemeMode] = useState<ThemeMode>(readStoredTheme);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const accountsRef = useRef(accounts);
   const autoWarmupAccountIdsRef = useRef(autoWarmupAccountIds);
@@ -354,12 +351,17 @@ function App() {
   }, [isActionsMenuOpen]);
 
   useEffect(() => {
-    const isDark = themeMode === "dark";
-    document.documentElement.classList.toggle("dark", isDark);
+    applyTheme(themeMode);
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
     } catch {
       // Ignore storage errors; theme still works for current session.
+    }
+
+    if (isTauriRuntime()) {
+      void import("@tauri-apps/api/event")
+        .then(({ emit }) => emit(THEME_CHANGED_EVENT, themeMode))
+        .catch((err) => console.error("Failed to sync tray theme:", err));
     }
   }, [themeMode]);
 
