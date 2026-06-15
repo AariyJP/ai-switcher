@@ -4,8 +4,9 @@ use super::process::check_processes;
 use crate::auth::{
     add_account, create_chatgpt_account_from_refresh_token, import_current_claude_account,
     import_current_claude_desktop_account, import_from_auth_json, import_from_auth_json_contents,
-    load_accounts, logout_claude_desktop, remove_account, save_accounts, set_active_account,
-    switch_to_account, switch_to_claude_account, switch_to_claude_desktop_account, touch_account,
+    load_accounts, logout_claude_code, logout_claude_desktop, logout_codex, remove_account,
+    save_accounts, set_active_account, switch_to_account, switch_to_claude_account,
+    switch_to_claude_desktop_account, touch_account,
 };
 use crate::types::{
     AccountInfo, AccountsStore, AuthData, AuthMode, ImportAccountsSummary, StoredAccount, ToolKind,
@@ -242,6 +243,30 @@ pub async fn claude_desktop_logout() -> Result<(), String> {
 
     let mut store = load_accounts().map_err(|e| e.to_string())?;
     store.set_active_account_id_for_mode(ToolKind::Claude, AuthMode::ClaudeDesktop, None);
+    save_accounts(&store).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Clear the current Codex login so the user can sign in fresh without
+/// triggering a server-side revoke of any previously imported account.
+#[tauri::command]
+pub async fn codex_logout() -> Result<(), String> {
+    logout_codex().map_err(|e| e.to_string())?;
+
+    let mut store = load_accounts().map_err(|e| e.to_string())?;
+    store.set_active_account_id_for_mode(ToolKind::Codex, AuthMode::ChatGPT, None);
+    save_accounts(&store).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Clear the current Claude Code login so the user can sign in fresh without
+/// triggering a server-side revoke of any previously imported account.
+#[tauri::command]
+pub async fn claude_code_logout() -> Result<(), String> {
+    logout_claude_code().map_err(|e| e.to_string())?;
+
+    let mut store = load_accounts().map_err(|e| e.to_string())?;
+    store.set_active_account_id_for_mode(ToolKind::Claude, AuthMode::ClaudeCode, None);
     save_accounts(&store).map_err(|e| e.to_string())?;
     Ok(())
 }

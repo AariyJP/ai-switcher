@@ -1,10 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import { Check, Eye, EyeOff, LogOut, RefreshCw, Trash2, Zap } from "lucide-react";
+import { Check, Eye, EyeOff, RefreshCw, Trash2, Zap } from "lucide-react";
 import type { AccountWithUsage } from "../types";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -26,7 +25,6 @@ interface AccountCardProps {
   switchDisabledLabel?: string;
   switchDisabledTooltip?: string;
   onToggleMask?: () => void;
-  isLogoutCard?: boolean;
   autoWarmupEnabled?: boolean;
   autoWarmupManagedByAll?: boolean;
   autoWarmupLabel?: string;
@@ -90,42 +88,29 @@ function getSubscriptionStatus(timestamp: string | null | undefined): {
 
 function BlurredText({ children, blur }: { children: React.ReactNode; blur: boolean }) {
   return (
-    <span
-      className={cn("select-none transition-all duration-200", blur && "blur-sm")}
-      style={blur ? { userSelect: "none" } : undefined}
-    >
+    <span className={cn("transition-all duration-200", blur && "select-none blur-sm")}>
       {children}
     </span>
   );
 }
 
-// Plan badge: prefer built-in variants; success/warning tones use semantic CSS tokens.
-type PlanBadgeProps = {
-  variant: "default" | "secondary" | "outline";
-  className?: string;
-};
+type PlanBadgeVariant = "default" | "secondary" | "outline" | "success" | "warning";
 
-function getPlanBadgeProps(planKey: string): PlanBadgeProps {
+function getPlanBadgeVariant(planKey: string): PlanBadgeVariant {
   switch (planKey) {
     case "pro":
-      return { variant: "default" };
+      return "default";
     case "plus":
-      return {
-        variant: "outline",
-        className: "border-success/30 bg-success/10 text-success",
-      };
+      return "success";
     case "team":
-      return { variant: "secondary" };
+      return "secondary";
     case "enterprise":
-      return {
-        variant: "outline",
-        className: "border-warning/30 bg-warning/10 text-warning",
-      };
+      return "warning";
     case "api_key":
-      return { variant: "secondary" };
+      return "secondary";
     case "free":
     default:
-      return { variant: "outline" };
+      return "outline";
   }
 }
 
@@ -154,7 +139,6 @@ export function AccountCard({
   switchDisabledLabel = "Codex Running",
   switchDisabledTooltip = "Close all Codex processes first",
   onToggleMask,
-  isLogoutCard = false,
   autoWarmupEnabled = false,
   autoWarmupManagedByAll = false,
   autoWarmupLabel,
@@ -216,16 +200,12 @@ export function AccountCard({
       ? "API Key"
       : null;
 
-  const planBadgeProps = getPlanBadgeProps(planKey);
+  const planBadgeVariant = getPlanBadgeVariant(planKey);
   const showPlanBadge =
     planDisplay !== null &&
     planKey !== "unknown" &&
     account.auth_mode !== "claude_desktop" &&
     !(account.auth_mode === "claude_code" && planKey === "code");
-  const usageUnsupportedMessage =
-    account.auth_mode === "claude_desktop"
-      ? "Usage is currently not supported for Claude Desktop accounts."
-      : null;
   const showSubscriptionStatus = usageEnabled && account.auth_mode === "chat_g_p_t";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
 
@@ -236,59 +216,9 @@ export function AccountCard({
       : "hover:ring-foreground/20"
   );
 
-  if (isLogoutCard) {
-    return (
-      <Card className={cardClassName}>
-        <CardHeader className="mb-3 grid grid-cols-[1fr_auto] gap-3 p-0">
-          <div className="min-w-0">
-            <div className="mb-1 flex items-center gap-2">
-              {account.is_active && <ActiveDot />}
-              <h3 className="text-foreground truncate font-semibold">Logout</h3>
-            </div>
-            <p className="text-muted-foreground truncate text-sm">
-              Clear the current Claude Desktop login without revoking saved
-              accounts. Open Claude Desktop afterwards to sign in with a new
-              account.
-            </p>
-          </div>
-          <Badge variant="outline" className="rounded-full px-2.5 py-1">
-            <LogOut data-icon="inline-start" /> Signed out
-          </Badge>
-        </CardHeader>
-
-        <CardContent className="flex gap-2 p-0">
-          {account.is_active ? (
-            <Button disabled variant="secondary" className="flex-1">
-              <Check data-icon="inline-start" /> Logged out
-            </Button>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  onClick={onSwitch}
-                  disabled={switching || switchDisabled}
-                  className="flex-1"
-                >
-                  {switching
-                    ? "Logging out..."
-                    : switchDisabled
-                      ? switchDisabledLabel
-                      : "Logout"}
-                </Button>
-              </TooltipTrigger>
-              {switchDisabled && (
-                <TooltipContent>{switchDisabledTooltip}</TooltipContent>
-              )}
-            </Tooltip>
-          )}
-        </CardContent>
-      </Card>
-    );
-  }
-
   return (
     <Card className={cardClassName}>
-      <CardHeader className="mb-3 grid grid-cols-[1fr_auto] gap-3 p-0">
+      <CardHeader className="mb-3 gap-3 p-0">
         <div className="min-w-0">
           <div className="mb-1 flex items-center gap-2">
             {account.is_active && <ActiveDot />}
@@ -323,7 +253,7 @@ export function AccountCard({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <CardAction className="flex items-center gap-2">
           {onToggleMask && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -331,6 +261,7 @@ export function AccountCard({
                   variant="ghost"
                   size="icon-sm"
                   onClick={onToggleMask}
+                  aria-label={masked ? "Show info" : "Hide info"}
                   className="text-muted-foreground hover:text-foreground"
                 >
                   {masked ? <EyeOff /> : <Eye />}
@@ -340,28 +271,19 @@ export function AccountCard({
             </Tooltip>
           )}
           {showPlanBadge && (
-            <Badge
-              variant={planBadgeProps.variant}
-              className={cn("rounded-full px-2.5 py-1", planBadgeProps.className)}
-            >
+            <Badge variant={planBadgeVariant} className="rounded-full px-2.5 py-1">
               {planDisplay}
             </Badge>
           )}
-        </div>
+        </CardAction>
       </CardHeader>
 
       <CardContent className="flex flex-col gap-3 p-0">
-        {usageUnsupportedMessage && (
-          <Alert>
-            <AlertDescription className="italic">{usageUnsupportedMessage}</AlertDescription>
-          </Alert>
-        )}
-
-        {usageEnabled && !usageUnsupportedMessage && (
+        {usageEnabled && (
           <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
         )}
 
-        {usageEnabled && !usageUnsupportedMessage && (
+        {usageEnabled && (
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <div className="text-muted-foreground">
               Last updated: {formatLastRefresh(lastRefresh)}
@@ -395,20 +317,18 @@ export function AccountCard({
               )}
             </Tooltip>
           )}
-          {usageEnabled && !usageUnsupportedMessage && warmupEnabled && (
+          {usageEnabled && warmupEnabled && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant="outline"
+                  variant="warning"
                   size="icon"
                   onClick={() => {
                     void onWarmup();
                   }}
                   disabled={warmingUp}
-                  className={cn(
-                    "border-warning/30 text-warning hover:bg-warning/10",
-                    warmingUp && "animate-pulse"
-                  )}
+                  aria-label={warmingUp ? "Sending warm-up request..." : "Send minimal warm-up request"}
+                  className={cn(warmingUp && "animate-pulse")}
                 >
                   <Zap />
                 </Button>
@@ -418,18 +338,14 @@ export function AccountCard({
               </TooltipContent>
             </Tooltip>
           )}
-          {usageEnabled && !usageUnsupportedMessage && warmupEnabled && onToggleAutoWarmup && (
+          {usageEnabled && warmupEnabled && onToggleAutoWarmup && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                  variant="outline"
+                  variant={autoWarmupEnabled ? "success" : "outline"}
                   onClick={onToggleAutoWarmup}
                   disabled={autoWarmupManagedByAll}
-                  className={cn(
-                    "whitespace-nowrap",
-                    autoWarmupEnabled &&
-                      "border-success/30 text-success hover:bg-success/10"
-                  )}
+                  className="whitespace-nowrap"
                 >
                   {autoWarmupLabel ?? `Auto: ${autoWarmupEnabled ? "on" : "off"}`}
                 </Button>
@@ -443,7 +359,7 @@ export function AccountCard({
               </TooltipContent>
             </Tooltip>
           )}
-          {usageEnabled && !usageUnsupportedMessage && (
+          {usageEnabled && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -451,6 +367,7 @@ export function AccountCard({
                   size="icon"
                   onClick={handleRefresh}
                   disabled={isRefreshing}
+                  aria-label="Refresh usage"
                 >
                   <RefreshCw className={cn(isRefreshing && "animate-spin")} />
                 </Button>
@@ -460,7 +377,7 @@ export function AccountCard({
           )}
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="destructive" size="icon" onClick={onDelete}>
+              <Button variant="destructive" size="icon" onClick={onDelete} aria-label="Remove account">
                 <Trash2 />
               </Button>
             </TooltipTrigger>

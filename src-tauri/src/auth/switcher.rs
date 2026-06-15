@@ -83,6 +83,28 @@ fn create_auth_json(account: &StoredAccount) -> Result<AuthDotJson> {
     }
 }
 
+/// Log out the current Codex login by overwriting ~/.codex/auth.json with an
+/// empty object. This clears the local login state without revoking the token
+/// server-side, mirroring the Claude Desktop logout behavior.
+pub fn logout_codex() -> Result<()> {
+    let codex_home = get_codex_home()?;
+    fs::create_dir_all(&codex_home)
+        .with_context(|| format!("Failed to create codex home: {}", codex_home.display()))?;
+
+    let auth_path = codex_home.join("auth.json");
+    fs::write(&auth_path, "{}")
+        .with_context(|| format!("Failed to write auth.json: {}", auth_path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&auth_path, perms)?;
+    }
+
+    Ok(())
+}
+
 /// Import an account from an existing auth.json file
 pub fn import_from_auth_json(path: &str, account_name: String) -> Result<StoredAccount> {
     let content =

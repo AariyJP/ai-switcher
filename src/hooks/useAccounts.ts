@@ -103,7 +103,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     ) => {
       try {
         let list = accountList ?? accountsRef.current;
-        if (list.length === 0 || authMode === "claude_desktop") {
+        if (list.length === 0) {
           return;
         }
 
@@ -177,10 +177,6 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     options?: { refreshMetadata?: boolean }
   ) => {
     try {
-      if (authMode === "claude_desktop") {
-        return;
-      }
-
       if (options?.refreshMetadata && tool === "codex") {
         await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
         await loadAccounts(true);
@@ -456,14 +452,20 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     }
   }, []);
 
-  const logoutClaudeDesktop = useCallback(async () => {
+  const logoutCurrent = useCallback(async () => {
+    const command =
+      tool === "codex"
+        ? "codex_logout"
+        : authMode === "claude_desktop"
+          ? "claude_desktop_logout"
+          : "claude_code_logout";
     try {
-      await invokeBackend("claude_desktop_logout");
+      await invokeBackend(command);
       await loadAccounts(true);
     } catch (err) {
       throw err;
     }
-  }, [loadAccounts]);
+  }, [loadAccounts, tool, authMode]);
 
   const loadMaskedAccountIds = useCallback(async () => {
     try {
@@ -521,7 +523,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     startClaudeOAuthLogin,
     completeClaudeOAuthLogin,
     cancelClaudeOAuthLogin,
-    logoutClaudeDesktop,
+    logoutCurrent,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
   };

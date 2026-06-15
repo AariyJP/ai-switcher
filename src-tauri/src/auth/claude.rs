@@ -123,6 +123,50 @@ pub fn read_current_claude_credentials_snapshot() -> Result<Vec<ClaudeCredential
     read_current_claude_credentials()
 }
 
+/// Log out the current Claude Code login by clearing the live credentials
+/// (macOS Keychain items / Windows credentials.json) without revoking the
+/// token server-side. Stored accounts keep their own credential copies.
+#[cfg(target_os = "macos")]
+pub fn logout_claude_code() -> Result<()> {
+    for (service_name, account_name) in list_claude_keychain_items()? {
+        delete_keychain_password(&service_name, &account_name)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn logout_claude_code() -> Result<()> {
+    let path = claude_credentials_path()?;
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read Claude credentials: {}", path.display()))?;
+    let mut root: Value = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse Claude credentials: {}", path.display()))?;
+
+    let Some(map) = root.as_object_mut() else {
+        return Ok(());
+    };
+
+    if map.remove("claudeAiOauth").is_none() {
+        return Ok(());
+    }
+
+    let serialized =
+        serde_json::to_string_pretty(&root).context("Failed to serialize Claude credentials")?;
+    std::fs::write(&path, serialized)
+        .with_context(|| format!("Failed to write Claude credentials: {}", path.display()))?;
+
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn logout_claude_code() -> Result<()> {
+    anyhow::bail!("Claude Code logout is currently supported on macOS and Windows");
+}
+
 #[derive(Default)]
 struct ClaudeMetadata {
     email: Option<String>,

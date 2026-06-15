@@ -11,7 +11,8 @@ mod discord;
 use commands::{
     add_account_from_file, add_claude_account_from_current,
     add_claude_desktop_account_from_current, cancel_claude_login, cancel_login, check_processes,
-    claude_desktop_logout, complete_claude_login, complete_login, delete_account,
+    claude_code_logout, claude_desktop_logout, codex_logout, complete_claude_login, complete_login,
+    delete_account,
     export_accounts_full_encrypted_file, export_accounts_slim_text, get_active_account_info,
     get_masked_account_ids, get_usage, import_accounts_full_encrypted_file,
     import_accounts_slim_text, list_accounts, refresh_account_metadata, refresh_all_accounts_usage,
@@ -37,6 +38,8 @@ pub fn run() {
             add_claude_account_from_current,
             add_claude_desktop_account_from_current,
             claude_desktop_logout,
+            codex_logout,
+            claude_code_logout,
             switch_account,
             delete_account,
             rename_account,
