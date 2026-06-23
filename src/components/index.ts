@@ -1,4 +1,5 @@
-export { AccountCard } from "./AccountCard";
-export { UsageBar } from "./UsageBar";
-export { AddAccountModal } from "./AddAccountModal";
-export { TitleBar } from "./TitleBar";
+export { AppFooter } from "@/components/AppFooter";
+export { AccountCard } from "@/components/AccountCard";
+export { UsageBar } from "@/components/UsageBar";
+export { AddAccountModal } from "@/components/AddAccountModal";
+export { TitleBar } from "@/components/TitleBar";

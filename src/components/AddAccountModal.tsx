@@ -6,7 +6,7 @@ import {
   openExternalUrl,
   pickAuthJsonFile,
   type FileSource,
-} from "../lib/platform";
+} from "@/lib/platform";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,7 +20,7 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { ActiveTool } from "../types";
+import type { ActiveTool } from "@/types";
 
 interface AddAccountModalProps {
   isOpen: boolean;

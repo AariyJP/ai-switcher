@@ -1,4 +1,4 @@
-import type { ImportAccountsSummary } from "../types";
+import type { ImportAccountsSummary } from "@/types";
 
 export type FileSource = string | File;
 

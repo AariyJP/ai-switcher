@@ -16,20 +16,20 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
-import { useAccounts } from "./hooks/useAccounts";
-import { AccountCard, AddAccountModal, TitleBar } from "./components";
+import { useAccounts } from "@/hooks/useAccounts";
+import { AccountCard, AddAccountModal, AppFooter, TitleBar } from "@/components";
 import {
   type ActiveTool,
   type AuthMode,
   type ProcessInfo,
   type ToolKind,
   type UsageInfo,
-} from "./types";
+} from "@/types";
 import {
   exportFullBackupFile,
   importFullBackupFile,
   invokeBackend,
-} from "./lib/platform";
+} from "@/lib/platform";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,7 +75,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
-import "./App.css";
+import "@/App.css";
 
 const THEME_STORAGE_KEY = "ai-switcher-theme";
 const ACTIVE_TOOL_STORAGE_KEY = "ai-switcher-active-tool";
@@ -1128,9 +1128,13 @@ function App() {
         >
           <div className="mx-auto max-w-5xl px-6">
             <TabsList variant="line" className="flex w-full">
-              <TabsTrigger value="codex">Codex</TabsTrigger>
-              <TabsTrigger value="claude_code">Claude Code</TabsTrigger>
-              <TabsTrigger value="claude_desktop">Claude Desktop</TabsTrigger>
+              <TabsTrigger value="codex" disabled={isRefreshing}>Codex</TabsTrigger>
+              <TabsTrigger value="claude_code" disabled={isRefreshing}>
+                Claude Code
+              </TabsTrigger>
+              <TabsTrigger value="claude_desktop" disabled={isRefreshing}>
+                Claude Desktop
+              </TabsTrigger>
             </TabsList>
           </div>
         </Tabs>
@@ -1354,6 +1358,7 @@ function App() {
                 </CardAction>
               </CardHeader>
             </Card>
+            <AppFooter />
           </section>
         )}
       </main>

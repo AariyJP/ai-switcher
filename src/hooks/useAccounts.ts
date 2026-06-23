@@ -7,8 +7,8 @@ import type {
   WarmupSummary,
   ImportAccountsSummary,
   ToolKind,
-} from "../types";
-import { invokeBackend, type FileSource } from "../lib/platform";
+} from "@/types";
+import { invokeBackend, type FileSource } from "@/lib/platform";
 
 export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
   const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);

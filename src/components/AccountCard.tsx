@@ -1,13 +1,13 @@
 import { useState, useRef, useEffect } from "react";
 import { Check, Eye, EyeOff, RefreshCw, Trash2, Zap } from "lucide-react";
-import type { AccountWithUsage } from "../types";
+import type { AccountWithUsage } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { UsageBar } from "./UsageBar";
+import { UsageBar } from "@/components/UsageBar";
 
 interface AccountCardProps {
   account: AccountWithUsage;
