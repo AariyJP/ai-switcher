@@ -33,6 +33,15 @@ export async function invokeBackend<T>(
   return payload as T;
 }
 
+export async function setWindowTheme(theme: "dark" | "light" | null): Promise<void> {
+  if (!isTauriRuntime()) return;
+  if (!/Win/i.test(navigator.userAgent)) return;
+  const dark =
+    theme === "dark" ||
+    (theme === null && !!window.matchMedia?.("(prefers-color-scheme: dark)").matches);
+  await invokeBackend("set_window_theme", { dark });
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   if (isTauriRuntime()) {
     const { openUrl } = await import("@tauri-apps/plugin-opener");

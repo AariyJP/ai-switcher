@@ -17,7 +17,7 @@ import {
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { useAccounts } from "@/hooks/useAccounts";
-import { AccountCard, AddAccountModal, AppFooter, TitleBar } from "@/components";
+import { AccountCard, AddAccountModal, AppFooter } from "@/components";
 import {
   type ActiveTool,
   type AuthMode,
@@ -29,6 +29,7 @@ import {
   exportFullBackupFile,
   importFullBackupFile,
   invokeBackend,
+  setWindowTheme,
 } from "@/lib/platform";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -440,6 +441,9 @@ function App() {
       document.documentElement.classList.toggle("dark", isDark);
     };
     apply();
+    void setWindowTheme(
+      themeMode === "dark" ? "dark" : themeMode === "light" ? "light" : null
+    );
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
     } catch {
@@ -951,19 +955,13 @@ function App() {
 
   return (
     <div className="bg-background text-foreground min-h-screen">
-      <div className="bg-background sticky top-0 z-50">
-        <TitleBar />
-      </div>
-      <header className="bg-background sticky top-14 z-40 border-b">
+      <header className="bg-background sticky top-0 z-40 border-b">
 
         <div className="mx-auto max-w-5xl px-6 py-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_max-content] md:items-center md:gap-4">
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-foreground text-xl font-bold tracking-tight">
-                    AI Switcher
-                  </h1>
                   {codexProcessInfo && (
                     <Badge variant={processBadgeVariant(hasRunningCodex)}>
                       <span

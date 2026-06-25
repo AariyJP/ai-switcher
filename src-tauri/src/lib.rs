@@ -16,8 +16,8 @@ use commands::{
     export_accounts_full_encrypted_file, export_accounts_slim_text, get_active_account_info,
     get_masked_account_ids, get_usage, import_accounts_full_encrypted_file,
     import_accounts_slim_text, list_accounts, refresh_account_metadata, refresh_all_accounts_usage,
-    rename_account, set_masked_account_ids, start_claude_login, start_login, switch_account,
-    warmup_account, warmup_all_accounts,
+    rename_account, set_masked_account_ids, set_window_theme, start_claude_login, start_login,
+    switch_account, warmup_account, warmup_all_accounts,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -65,6 +65,8 @@ pub fn run() {
             warmup_all_accounts,
             // Process detection
             check_processes,
+            // Window
+            set_window_theme,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
