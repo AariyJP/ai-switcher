@@ -11,7 +11,7 @@ pub fn set_window_theme(window: tauri::Window, dark: bool) -> Result<(), String>
 
         let hwnd = window.hwnd().map_err(|e| e.to_string())?;
         let value: u32 = if dark { 1 } else { 0 };
-        let caption_color: u32 = if dark { 0x000a_0a0a } else { 0x00ff_ffff };
+        let caption_color: u32 = if dark { 0x000a0a0a } else { 0x00ffffff };
         unsafe {
             DwmSetWindowAttribute(
                 hwnd.0,
