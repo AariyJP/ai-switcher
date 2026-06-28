@@ -1,11 +1,13 @@
 //! Usage query Tauri commands
 
 use crate::api::usage::{
-    fetch_chatgpt_account_metadata, get_account_usage, refresh_all_usage,
-    warmup_account as send_warmup,
+    consume_codex_rate_limit_reset_credit as consume_reset_credit, fetch_chatgpt_account_metadata,
+    get_account_usage, refresh_all_usage, warmup_account as send_warmup,
 };
 use crate::auth::{get_account, load_accounts, refresh_chatgpt_tokens, update_account_metadata};
-use crate::types::{AccountInfo, AuthData, ToolKind, UsageInfo, WarmupSummary};
+use crate::types::{
+    AccountInfo, AuthData, CodexRateLimitResetConsumeResult, ToolKind, UsageInfo, WarmupSummary,
+};
 use futures::{stream, StreamExt};
 
 /// Get usage info for a specific account
@@ -60,6 +62,22 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
 pub async fn refresh_all_accounts_usage() -> Result<Vec<UsageInfo>, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
     Ok(refresh_all_usage(&store.accounts).await)
+}
+
+#[tauri::command]
+pub async fn consume_codex_rate_limit_reset_credit(
+    account_id: String,
+) -> Result<CodexRateLimitResetConsumeResult, String> {
+    let account = get_account(&account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Account not found: {account_id}"))?;
+
+    match &account.auth_data {
+        AuthData::ChatGPT { .. } => consume_reset_credit(&account)
+            .await
+            .map_err(|e| e.to_string()),
+        _ => Err("Rate limit resets require a Codex ChatGPT account".to_string()),
+    }
 }
 
 /// Send a minimal warm-up request for one account

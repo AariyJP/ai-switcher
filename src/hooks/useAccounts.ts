@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type {
   AccountInfo,
   AuthMode,
+  CodexRateLimitResetConsumeResult,
   UsageInfo,
   AccountWithUsage,
   WarmupSummary,
@@ -38,6 +39,8 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
       has_credits: null,
       unlimited_credits: null,
       credits_balance: null,
+      rate_limit_reset_available_count: null,
+      rate_limit_reset_credits: null,
       error: message,
     }),
     []
@@ -111,9 +114,13 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
           await runWithConcurrency(
             list,
             async (account) => {
-              await invokeBackend<AccountInfo>("refresh_account_metadata", {
-                accountId: account.id,
-              });
+              try {
+                await invokeBackend<AccountInfo>("refresh_account_metadata", {
+                  accountId: account.id,
+                });
+              } catch (err) {
+                console.warn("Failed to refresh account metadata:", err);
+              }
             },
             maxConcurrentUsageRequests
           );
@@ -178,7 +185,11 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
   ) => {
     try {
       if (options?.refreshMetadata && tool === "codex") {
-        await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
+        try {
+          await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
+        } catch (err) {
+          console.warn("Failed to refresh account metadata:", err);
+        }
         await loadAccounts(true);
       }
 
@@ -239,6 +250,21 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
       throw err;
     }
   }, [tool]);
+
+  const useCodexRateLimitReset = useCallback(
+    async (accountId: string) => {
+      if (tool !== "codex") {
+        throw new Error("Rate limit resets are only available for Codex accounts");
+      }
+      const result = await invokeBackend<CodexRateLimitResetConsumeResult>(
+        "consume_codex_rate_limit_reset_credit",
+        { accountId }
+      );
+      await refreshSingleUsage(accountId);
+      return result;
+    },
+    [refreshSingleUsage, tool]
+  );
 
   const switchAccount = useCallback(
     async (accountId: string) => {
@@ -507,6 +533,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     refreshSingleUsage,
     warmupAccount,
     warmupAllAccounts,
+    useCodexRateLimitReset,
     switchAccount,
     deleteAccount,
     renameAccount,

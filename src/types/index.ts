@@ -31,7 +31,36 @@ export interface UsageInfo {
   has_credits: boolean | null;
   unlimited_credits: boolean | null;
   credits_balance: string | null;
+  rate_limit_reset_available_count: number | null;
+  rate_limit_reset_credits: CodexRateLimitResetCredits | null;
   error: string | null;
+}
+
+export interface CodexRateLimitResetCredits {
+  credits: CodexRateLimitResetCredit[];
+  available_count: number;
+  total_earned_count: number | null;
+}
+
+export interface CodexRateLimitResetCredit {
+  reset_type: string | null;
+  status: string;
+  granted_at: string;
+  expires_at: string;
+  redeem_started_at: string | null;
+  redeemed_at: string | null;
+  title: string | null;
+  description: string | null;
+}
+
+export type CodexRateLimitResetOutcome =
+  | "reset"
+  | "nothing_to_reset"
+  | "no_credit"
+  | "already_redeemed";
+
+export interface CodexRateLimitResetConsumeResult {
+  outcome: CodexRateLimitResetOutcome;
 }
 
 export interface OAuthLoginInfo {

@@ -97,6 +97,9 @@ type AutoWarmupLedger = Record<
   }
 >;
 
+const resolveThemeDark = (themeMode: ThemeMode, prefersDark: boolean) =>
+  themeMode === "dark" || (themeMode === "system" && prefersDark);
+
 const ACTIVE_TOOL_TO_BACKEND: Record<
   ActiveTool,
   { tool: ToolKind; authMode?: AuthMode }
@@ -214,6 +217,7 @@ function App() {
     refreshSingleUsage,
     warmupAccount,
     warmupAllAccounts,
+    useCodexRateLimitReset,
     switchAccount,
     deleteAccount,
     renameAccount,
@@ -436,14 +440,11 @@ function App() {
         ? window.matchMedia("(prefers-color-scheme: dark)")
         : null;
     const apply = () => {
-      const isDark =
-        themeMode === "dark" || (themeMode === "system" && !!mq?.matches);
+      const isDark = resolveThemeDark(themeMode, !!mq?.matches);
       document.documentElement.classList.toggle("dark", isDark);
+      void setWindowTheme(isDark ? "dark" : "light");
     };
     apply();
-    void setWindowTheme(
-      themeMode === "dark" ? "dark" : themeMode === "light" ? "light" : null
-    );
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
     } catch {
@@ -554,6 +555,32 @@ function App() {
       toast.error(`Warm-up failed for ${accountName}: ${formatWarmupError(err)}`);
     } finally {
       setWarmingUpId(null);
+    }
+  };
+
+  const handleUseRateLimitReset = async (accountId: string) => {
+    try {
+      const result = await useCodexRateLimitReset(accountId);
+      switch (result.outcome) {
+        case "reset":
+          toast.success("Usage reset.");
+          break;
+        case "already_redeemed":
+          toast.success("Usage reset already applied.");
+          break;
+        case "nothing_to_reset":
+          toast.info("Your usage does not need a reset right now.");
+          break;
+        case "no_credit":
+          toast.warning("No usage limit resets are available.");
+          break;
+      }
+    } catch (err) {
+      console.error("Failed to use rate limit reset:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Failed to use usage reset"
+      );
+      throw err;
     }
   };
 
@@ -1194,6 +1221,9 @@ function App() {
                   onRefresh={() =>
                     refreshSingleUsage(activeAccount.id, { refreshMetadata: true })
                   }
+                  onUseRateLimitReset={() =>
+                    handleUseRateLimitReset(activeAccount.id)
+                  }
                   onRename={(newName) => renameAccount(activeAccount.id, newName)}
                   switching={switchingId === activeAccount.id}
                   switchDisabled={hasRunningActiveTool}
@@ -1276,6 +1306,9 @@ function App() {
                       onDelete={() => handleDelete(account.id)}
                       onRefresh={() =>
                         refreshSingleUsage(account.id, { refreshMetadata: true })
+                      }
+                      onUseRateLimitReset={() =>
+                        handleUseRateLimitReset(account.id)
                       }
                       onRename={(newName) => renameAccount(account.id, newName)}
                       switching={switchingId === account.id}

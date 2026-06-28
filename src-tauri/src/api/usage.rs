@@ -10,7 +10,7 @@ use reqwest::{
     },
     StatusCode,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -19,7 +19,8 @@ use crate::auth::{
     refresh_claude_tokens, sync_active_claude_account_credentials,
 };
 use crate::types::{
-    AuthData, ClaudeCredential, ClaudeDesktopSession, CreditStatusDetails, RateLimitDetails,
+    AuthData, ClaudeCredential, ClaudeDesktopSession, CodexRateLimitResetConsumeResult,
+    CodexRateLimitResetCredits, CodexRateLimitResetOutcome, CreditStatusDetails, RateLimitDetails,
     RateLimitStatusPayload, RateLimitWindow, StoredAccount, UsageInfo,
 };
 
@@ -27,6 +28,10 @@ const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
 const CHATGPT_ACCOUNTS_CHECK_API: &str =
     "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
 const CHATGPT_CODEX_RESPONSES_API: &str = "https://chatgpt.com/backend-api/codex/responses";
+const CHATGPT_RATE_LIMIT_RESET_CREDITS_API: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const CHATGPT_RATE_LIMIT_RESET_CREDITS_CONSUME_API: &str =
+    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 const OPENAI_API: &str = "https://api.openai.com/v1";
 const CODEX_USER_AGENT: &str = "codex-cli/1.0.0";
 const CLAUDE_API: &str = "https://api.anthropic.com/api";
@@ -65,6 +70,16 @@ struct AccountsCheckAccount {
 struct AccountsCheckEntitlement {
     #[serde(default)]
     expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConsumeRateLimitResetCreditRequest {
+    redeem_request_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConsumeRateLimitResetCreditResponse {
+    code: CodexRateLimitResetOutcome,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +123,8 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
                 has_credits: None,
                 unlimited_credits: None,
                 credits_balance: None,
+                rate_limit_reset_available_count: None,
+                rate_limit_reset_credits: None,
                 error: Some("Usage info not available for API key accounts".to_string()),
             })
         }
@@ -171,6 +188,34 @@ pub async fn fetch_chatgpt_account_metadata(
     })
 }
 
+pub async fn consume_codex_rate_limit_reset_credit(
+    account: &StoredAccount,
+) -> Result<CodexRateLimitResetConsumeResult> {
+    let fresh_account = ensure_chatgpt_tokens_fresh(account).await?;
+    let (access_token, chatgpt_account_id) = extract_chatgpt_auth(&fresh_account)?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+
+    let response = send_chatgpt_rate_limit_reset_consume_request(
+        access_token,
+        chatgpt_account_id,
+        &request_id,
+    )
+    .await?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        let refreshed_account = refresh_chatgpt_tokens(&fresh_account).await?;
+        let (retry_token, retry_account_id) = extract_chatgpt_auth(&refreshed_account)?;
+        let retry_response = send_chatgpt_rate_limit_reset_consume_request(
+            retry_token,
+            retry_account_id,
+            &request_id,
+        )
+        .await?;
+        return parse_rate_limit_reset_consume_response(retry_response).await;
+    }
+
+    parse_rate_limit_reset_consume_response(response).await
+}
+
 async fn get_usage_with_chatgpt_auth(account: &StoredAccount) -> Result<UsageInfo> {
     let fresh_account = ensure_chatgpt_tokens_fresh(account).await?;
     let (access_token, chatgpt_account_id) = extract_chatgpt_auth(&fresh_account)?;
@@ -184,15 +229,17 @@ async fn get_usage_with_chatgpt_auth(account: &StoredAccount) -> Result<UsageInf
         let refreshed_account = refresh_chatgpt_tokens(&fresh_account).await?;
         let (retry_token, retry_account_id) = extract_chatgpt_auth(&refreshed_account)?;
         let retry_response = send_chatgpt_usage_request(retry_token, retry_account_id).await?;
-        return parse_usage_response(
+        let usage = parse_usage_response(
             &refreshed_account.id,
             &refreshed_account.name,
             retry_response,
         )
-        .await;
+        .await?;
+        return Ok(attach_rate_limit_reset_credits(usage, retry_token, retry_account_id).await);
     }
 
-    parse_usage_response(&fresh_account.id, &fresh_account.name, response).await
+    let usage = parse_usage_response(&fresh_account.id, &fresh_account.name, response).await?;
+    Ok(attach_rate_limit_reset_credits(usage, access_token, chatgpt_account_id).await)
 }
 
 async fn get_usage_with_claude_auth(account: &StoredAccount) -> Result<UsageInfo> {
@@ -285,6 +332,63 @@ async fn parse_usage_response(
     Ok(usage)
 }
 
+async fn attach_rate_limit_reset_credits(
+    mut usage: UsageInfo,
+    access_token: &str,
+    chatgpt_account_id: Option<&str>,
+) -> UsageInfo {
+    match fetch_rate_limit_reset_credits(access_token, chatgpt_account_id).await {
+        Ok(reset_credits) => {
+            usage.rate_limit_reset_available_count = Some(reset_credits.available_count);
+            usage.rate_limit_reset_credits = Some(reset_credits);
+        }
+        Err(err) => {
+            println!("[Usage] Failed to fetch rate limit reset credits: {err}");
+        }
+    }
+    usage
+}
+
+async fn fetch_rate_limit_reset_credits(
+    access_token: &str,
+    chatgpt_account_id: Option<&str>,
+) -> Result<CodexRateLimitResetCredits> {
+    let response = send_chatgpt_get_request(
+        CHATGPT_RATE_LIMIT_RESET_CREDITS_API,
+        access_token,
+        chatgpt_account_id,
+    )
+    .await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Rate limit reset credits API error: {status} - {body}");
+    }
+
+    response
+        .json()
+        .await
+        .context("Failed to parse rate limit reset credits response")
+}
+
+async fn parse_rate_limit_reset_consume_response(
+    response: reqwest::Response,
+) -> Result<CodexRateLimitResetConsumeResult> {
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Rate limit reset consume API error: {status} - {body}");
+    }
+
+    let payload: ConsumeRateLimitResetCreditResponse = response
+        .json()
+        .await
+        .context("Failed to parse rate limit reset consume response")?;
+    Ok(CodexRateLimitResetConsumeResult {
+        outcome: payload.code,
+    })
+}
+
 async fn get_usage_with_claude_desktop_auth(account: &StoredAccount) -> Result<UsageInfo> {
     let AuthData::ClaudeDesktop { session, .. } = &account.auth_data else {
         anyhow::bail!("Account is not a Claude Desktop account");
@@ -349,7 +453,10 @@ async fn send_claude_desktop_usage_request(
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(USER_AGENT, HeaderValue::from_static(CLAUDE_DESKTOP_USER_AGENT));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(CLAUDE_DESKTOP_USER_AGENT),
+    );
     headers.insert(REFERER, HeaderValue::from_static("https://claude.ai/"));
     headers.insert(
         HeaderName::from_static("anthropic-client-platform"),
@@ -608,6 +715,27 @@ async fn send_chatgpt_usage_request(
     .await
 }
 
+async fn send_chatgpt_rate_limit_reset_consume_request(
+    access_token: &str,
+    chatgpt_account_id: Option<&str>,
+    redeem_request_id: &str,
+) -> Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    let headers = build_chatgpt_headers(access_token, chatgpt_account_id)?;
+    let payload = ConsumeRateLimitResetCreditRequest {
+        redeem_request_id: redeem_request_id.to_string(),
+    };
+
+    client
+        .post(CHATGPT_RATE_LIMIT_RESET_CREDITS_CONSUME_API)
+        .headers(headers)
+        .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+        .json(&payload)
+        .send()
+        .await
+        .context("Failed to consume ChatGPT rate limit reset credit")
+}
+
 async fn send_claude_usage_request(access_token: &str) -> Result<reqwest::Response> {
     let client = reqwest::Client::new();
     let mut headers = HeaderMap::new();
@@ -757,6 +885,10 @@ fn collect_last_text(value: &Value, last: &mut Option<String>) {
 fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPayload) -> UsageInfo {
     let (primary, secondary) = extract_rate_limits(payload.rate_limit);
     let credits = extract_credits(payload.credits);
+    let rate_limit_reset_available_count = payload
+        .rate_limit_reset_credits
+        .as_ref()
+        .map(|summary| summary.available_count);
 
     UsageInfo {
         account_id: account_id.to_string(),
@@ -776,6 +908,8 @@ fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPaylo
         has_credits: credits.as_ref().map(|c| c.has_credits),
         unlimited_credits: credits.as_ref().map(|c| c.unlimited),
         credits_balance: credits.and_then(|c| c.balance),
+        rate_limit_reset_available_count,
+        rate_limit_reset_credits: None,
         error: None,
     }
 }
@@ -818,6 +952,8 @@ fn convert_claude_payload_to_usage_info(
         has_credits,
         unlimited_credits,
         credits_balance,
+        rate_limit_reset_available_count: None,
+        rate_limit_reset_credits: None,
         error: None,
     }
 }

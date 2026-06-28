@@ -33,13 +33,10 @@ export async function invokeBackend<T>(
   return payload as T;
 }
 
-export async function setWindowTheme(theme: "dark" | "light" | null): Promise<void> {
+export async function setWindowTheme(theme: "dark" | "light"): Promise<void> {
   if (!isTauriRuntime()) return;
   if (!/Win/i.test(navigator.userAgent)) return;
-  const dark =
-    theme === "dark" ||
-    (theme === null && !!window.matchMedia?.("(prefers-color-scheme: dark)").matches);
-  await invokeBackend("set_window_theme", { dark });
+  await invokeBackend("set_window_theme", { dark: theme === "dark" });
 }
 
 export async function openExternalUrl(url: string): Promise<void> {

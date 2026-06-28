@@ -1,6 +1,25 @@
 import { useState, useRef, useEffect } from "react";
-import { Check, Eye, EyeOff, RefreshCw, Trash2, Zap } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+  Zap,
+} from "lucide-react";
 import type { AccountWithUsage } from "@/types";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
@@ -29,6 +48,7 @@ interface AccountCardProps {
   autoWarmupManagedByAll?: boolean;
   autoWarmupLabel?: string;
   onToggleAutoWarmup?: () => void;
+  onUseRateLimitReset?: () => Promise<unknown>;
 }
 
 function formatLastRefresh(date: Date | null): string {
@@ -84,6 +104,25 @@ function getSubscriptionStatus(timestamp: string | null | undefined): {
     label: `Until ${formattedDate}`,
     className: "text-muted-foreground",
   };
+}
+
+function formatResetCreditExpiry(timestamp: string): string {
+  const expiryDate = new Date(timestamp);
+  if (Number.isNaN(expiryDate.getTime())) return "Expiry unavailable";
+
+  const exact = new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(expiryDate);
+  const remainingMs = expiryDate.getTime() - Date.now();
+  if (remainingMs <= 0) return `Expired ${exact}`;
+  const remainingHours = Math.floor(remainingMs / (60 * 60 * 1000));
+  if (remainingHours < 24) return `Expires in ${remainingHours}h (${exact})`;
+  const remainingDays = Math.floor(remainingHours / 24);
+  return `Expires in ${remainingDays}d (${exact})`;
 }
 
 function BlurredText({ children, blur }: { children: React.ReactNode; blur: boolean }) {
@@ -143,8 +182,12 @@ export function AccountCard({
   autoWarmupManagedByAll = false,
   autoWarmupLabel,
   onToggleAutoWarmup,
+  onUseRateLimitReset,
 }: AccountCardProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
+  const [isResetDetailsOpen, setIsResetDetailsOpen] = useState(false);
+  const [isUsingReset, setIsUsingReset] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(
     account.usage && !account.usage.error ? new Date() : null
   );
@@ -166,6 +209,20 @@ export function AccountCard({
       setLastRefresh(new Date());
     } finally {
       setIsRefreshing(false);
+    }
+  };
+
+  const handleUseRateLimitReset = async () => {
+    if (!onUseRateLimitReset) return;
+    setIsUsingReset(true);
+    try {
+      await onUseRateLimitReset();
+      setLastRefresh(new Date());
+      setIsResetDialogOpen(false);
+    } catch (err) {
+      console.error("Failed to use rate limit reset:", err);
+    } finally {
+      setIsUsingReset(false);
     }
   };
 
@@ -208,6 +265,30 @@ export function AccountCard({
     !(account.auth_mode === "claude_code" && planKey === "code");
   const showSubscriptionStatus = usageEnabled && account.auth_mode === "chat_g_p_t";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
+  const resetCredits = account.usage?.rate_limit_reset_credits;
+  const resetAvailableCount =
+    resetCredits?.available_count ?? account.usage?.rate_limit_reset_available_count ?? 0;
+  const availableResetCredits = (resetCredits?.credits ?? [])
+    .filter((credit) => credit.status === "available")
+    .sort(
+      (a, b) =>
+        new Date(a.expires_at).getTime() - new Date(b.expires_at).getTime()
+    );
+  const resetExpiryLabels =
+    resetAvailableCount > 0
+      ? Array.from({ length: resetAvailableCount }, (_, index) =>
+          availableResetCredits[index]?.expires_at
+            ? formatResetCreditExpiry(availableResetCredits[index].expires_at)
+            : "Expiry unavailable"
+        )
+      : [];
+  const showRateLimitReset =
+    usageEnabled &&
+    account.auth_mode === "chat_g_p_t" &&
+    (resetCredits != null ||
+      account.usage?.rate_limit_reset_available_count != null);
+  const canUseRateLimitReset =
+    !!onUseRateLimitReset && resetAvailableCount > 0 && !isUsingReset;
 
   const cardClassName = cn(
     "relative gap-0 p-5 transition-all duration-200",
@@ -217,6 +298,7 @@ export function AccountCard({
   );
 
   return (
+    <>
     <Card className={cardClassName}>
       <CardHeader className="mb-3 gap-3 p-0">
         <div className="min-w-0">
@@ -294,6 +376,42 @@ export function AccountCard({
               </div>
             )}
           </div>
+        )}
+
+        {showRateLimitReset && (
+          <button
+            type="button"
+            className={cn(
+              "border-border/60 bg-muted/30 w-full rounded-md border p-3 text-left text-xs transition-colors",
+              resetExpiryLabels.length > 0 && "cursor-pointer hover:bg-muted/50"
+            )}
+            aria-expanded={isResetDetailsOpen}
+            disabled={resetExpiryLabels.length === 0}
+            onClick={() => setIsResetDetailsOpen((open) => !open)}
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="text-foreground shrink-0 font-medium">Usage resets</span>
+              <Badge variant={resetAvailableCount > 0 ? "success" : "secondary"}>
+                {resetAvailableCount} available
+              </Badge>
+              <span className="min-w-0 flex-1" />
+              {resetExpiryLabels.length > 0 && (
+                <ChevronDown
+                  className={cn(
+                    "text-muted-foreground size-4 shrink-0 transition-transform",
+                    isResetDetailsOpen && "rotate-180"
+                  )}
+                />
+              )}
+            </div>
+            {isResetDetailsOpen && resetExpiryLabels.length > 0 && (
+              <ol className="text-muted-foreground mt-2 flex list-decimal flex-col gap-1 pl-4">
+                {resetExpiryLabels.map((label, index) => (
+                  <li key={`${label}-${index}`}>{label}</li>
+                ))}
+              </ol>
+            )}
+          </button>
         )}
 
         <div className="flex gap-2">
@@ -375,6 +493,26 @@ export function AccountCard({
               <TooltipContent>Refresh usage</TooltipContent>
             </Tooltip>
           )}
+          {usageEnabled && account.auth_mode === "chat_g_p_t" && onUseRateLimitReset && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="destructive"
+                  size="icon"
+                  onClick={() => setIsResetDialogOpen(true)}
+                  disabled={!canUseRateLimitReset}
+                  aria-label="Use usage reset"
+                >
+                  <RotateCcw className={cn(isUsingReset && "animate-spin")} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {resetAvailableCount > 0
+                  ? "Use usage reset"
+                  : "No usage limit resets available"}
+              </TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="destructive" size="icon" onClick={onDelete} aria-label="Remove account">
@@ -386,5 +524,41 @@ export function AccountCard({
         </div>
       </CardContent>
     </Card>
+    <AlertDialog open={isResetDialogOpen} onOpenChange={setIsResetDialogOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Use usage reset?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This will reset your current Codex usage limits. You have{" "}
+            {resetAvailableCount} usage limit{" "}
+            {resetAvailableCount === 1 ? "reset" : "resets"} available.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {resetExpiryLabels.length > 0 && (
+          <div className="text-muted-foreground text-sm">
+            <div className="text-foreground mb-2 font-medium">Available resets</div>
+            <ol className="flex list-decimal flex-col gap-1 pl-5">
+              {resetExpiryLabels.map((label, index) => (
+                <li key={`${label}-dialog-${index}`}>{label}</li>
+              ))}
+            </ol>
+          </div>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isUsingReset}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={!canUseRateLimitReset}
+            onClick={(event) => {
+              event.preventDefault();
+              void handleUseRateLimitReset();
+            }}
+          >
+            {isUsingReset ? "Using..." : "Use reset"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
