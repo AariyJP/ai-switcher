@@ -16,20 +16,21 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
-import { useAccounts } from "./hooks/useAccounts";
-import { AccountCard, AddAccountModal, TitleBar } from "./components";
+import { useAccounts } from "@/hooks/useAccounts";
+import { AccountCard, AddAccountModal, AppFooter } from "@/components";
 import {
   type ActiveTool,
   type AuthMode,
   type ProcessInfo,
   type ToolKind,
   type UsageInfo,
-} from "./types";
+} from "@/types";
 import {
   exportFullBackupFile,
   importFullBackupFile,
   invokeBackend,
-} from "./lib/platform";
+  setWindowTheme,
+} from "@/lib/platform";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,7 +76,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
-import "./App.css";
+import "@/App.css";
 
 const THEME_STORAGE_KEY = "ai-switcher-theme";
 const ACTIVE_TOOL_STORAGE_KEY = "ai-switcher-active-tool";
@@ -95,6 +96,9 @@ type AutoWarmupLedger = Record<
     lastSuccessfulWarmupAt?: number;
   }
 >;
+
+const resolveThemeDark = (themeMode: ThemeMode, prefersDark: boolean) =>
+  themeMode === "dark" || (themeMode === "system" && prefersDark);
 
 const ACTIVE_TOOL_TO_BACKEND: Record<
   ActiveTool,
@@ -213,6 +217,7 @@ function App() {
     refreshSingleUsage,
     warmupAccount,
     warmupAllAccounts,
+    useCodexRateLimitReset,
     switchAccount,
     deleteAccount,
     renameAccount,
@@ -435,9 +440,9 @@ function App() {
         ? window.matchMedia("(prefers-color-scheme: dark)")
         : null;
     const apply = () => {
-      const isDark =
-        themeMode === "dark" || (themeMode === "system" && !!mq?.matches);
+      const isDark = resolveThemeDark(themeMode, !!mq?.matches);
       document.documentElement.classList.toggle("dark", isDark);
+      void setWindowTheme(isDark ? "dark" : "light");
     };
     apply();
     try {
@@ -550,6 +555,36 @@ function App() {
       toast.error(`Warm-up failed for ${accountName}: ${formatWarmupError(err)}`);
     } finally {
       setWarmingUpId(null);
+    }
+  };
+
+  const handleUseRateLimitReset = async (accountId: string) => {
+    try {
+      const result = await useCodexRateLimitReset(accountId);
+      switch (result.outcome) {
+        case "reset":
+          toast.success("Usage reset.");
+          break;
+        case "already_redeemed":
+          toast.success("Usage reset already applied.");
+          break;
+        case "nothing_to_reset":
+          toast.info("Your usage does not need a reset right now.");
+          break;
+        case "no_credit":
+          toast.warning("No usage limit resets are available.");
+          break;
+        default:
+          console.warn("Unknown usage reset outcome:", result.outcome);
+          toast("Usage reset request completed.");
+          break;
+      }
+    } catch (err) {
+      console.error("Failed to use rate limit reset:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Failed to use usage reset"
+      );
+      throw err;
     }
   };
 
@@ -951,19 +986,13 @@ function App() {
 
   return (
     <div className="bg-background text-foreground min-h-screen">
-      <div className="bg-background sticky top-0 z-50">
-        <TitleBar />
-      </div>
-      <header className="bg-background sticky top-14 z-40 border-b">
+      <header className="bg-background sticky top-0 z-40 border-b">
 
         <div className="mx-auto max-w-5xl px-6 py-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_max-content] md:items-center md:gap-4">
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-foreground text-xl font-bold tracking-tight">
-                    AI Switcher
-                  </h1>
                   {codexProcessInfo && (
                     <Badge variant={processBadgeVariant(hasRunningCodex)}>
                       <span
@@ -1128,9 +1157,13 @@ function App() {
         >
           <div className="mx-auto max-w-5xl px-6">
             <TabsList variant="line" className="flex w-full">
-              <TabsTrigger value="codex">Codex</TabsTrigger>
-              <TabsTrigger value="claude_code">Claude Code</TabsTrigger>
-              <TabsTrigger value="claude_desktop">Claude Desktop</TabsTrigger>
+              <TabsTrigger value="codex" disabled={isRefreshing}>Codex</TabsTrigger>
+              <TabsTrigger value="claude_code" disabled={isRefreshing}>
+                Claude Code
+              </TabsTrigger>
+              <TabsTrigger value="claude_desktop" disabled={isRefreshing}>
+                Claude Desktop
+              </TabsTrigger>
             </TabsList>
           </div>
         </Tabs>
@@ -1191,6 +1224,9 @@ function App() {
                   onDelete={() => handleDelete(activeAccount.id)}
                   onRefresh={() =>
                     refreshSingleUsage(activeAccount.id, { refreshMetadata: true })
+                  }
+                  onUseRateLimitReset={() =>
+                    handleUseRateLimitReset(activeAccount.id)
                   }
                   onRename={(newName) => renameAccount(activeAccount.id, newName)}
                   switching={switchingId === activeAccount.id}
@@ -1275,6 +1311,9 @@ function App() {
                       onRefresh={() =>
                         refreshSingleUsage(account.id, { refreshMetadata: true })
                       }
+                      onUseRateLimitReset={() =>
+                        handleUseRateLimitReset(account.id)
+                      }
                       onRename={(newName) => renameAccount(account.id, newName)}
                       switching={switchingId === account.id}
                       switchDisabled={hasRunningActiveTool}
@@ -1354,6 +1393,7 @@ function App() {
                 </CardAction>
               </CardHeader>
             </Card>
+            <AppFooter />
           </section>
         )}
       </main>

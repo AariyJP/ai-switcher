@@ -1,4 +1,4 @@
-import type { ImportAccountsSummary } from "../types";
+import type { ImportAccountsSummary } from "@/types";
 
 export type FileSource = string | File;
 
@@ -31,6 +31,12 @@ export async function invokeBackend<T>(
   }
 
   return payload as T;
+}
+
+export async function setWindowTheme(theme: "dark" | "light"): Promise<void> {
+  if (!isTauriRuntime()) return;
+  if (!/Win/i.test(navigator.userAgent)) return;
+  await invokeBackend("set_window_theme", { dark: theme === "dark" });
 }
 
 export async function openExternalUrl(url: string): Promise<void> {

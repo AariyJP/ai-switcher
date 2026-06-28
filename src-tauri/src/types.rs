@@ -461,6 +461,9 @@ pub struct UsageInfo {
     pub unlimited_credits: Option<bool>,
     /// Credit balance string (e.g., "$10.50")
     pub credits_balance: Option<String>,
+    pub rate_limit_reset_available_count: Option<i64>,
+    pub rate_limit_reset_credits: Option<CodexRateLimitResetCredits>,
+    pub rate_limit_reset_error: Option<String>,
     /// Error message if usage fetch failed
     pub error: Option<String>,
 }
@@ -479,9 +482,45 @@ impl UsageInfo {
             has_credits: None,
             unlimited_credits: None,
             credits_balance: None,
+            rate_limit_reset_available_count: None,
+            rate_limit_reset_credits: None,
+            rate_limit_reset_error: None,
             error: Some(error),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexRateLimitResetCredits {
+    pub credits: Vec<CodexRateLimitResetCredit>,
+    pub available_count: i64,
+    pub total_earned_count: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexRateLimitResetCredit {
+    pub reset_type: Option<String>,
+    pub status: String,
+    pub granted_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub redeem_started_at: Option<DateTime<Utc>>,
+    pub redeemed_at: Option<DateTime<Utc>>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexRateLimitResetOutcome {
+    Reset,
+    NothingToReset,
+    NoCredit,
+    AlreadyRedeemed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexRateLimitResetConsumeResult {
+    pub outcome: CodexRateLimitResetOutcome,
 }
 
 /// Warm-up execution summary across accounts
@@ -527,6 +566,13 @@ pub struct RateLimitStatusPayload {
     pub rate_limit: Option<RateLimitDetails>,
     #[serde(default)]
     pub credits: Option<CreditStatusDetails>,
+    #[serde(default)]
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitResetCreditsSummary {
+    pub available_count: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

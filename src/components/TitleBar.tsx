@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "@/components/ui/button";
-import { isTauriRuntime } from "../lib/platform";
+import { isTauriRuntime } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 const segoeGlyphStyle: React.CSSProperties = {

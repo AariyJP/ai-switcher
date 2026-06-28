@@ -635,8 +635,8 @@ fn encrypt_cookie_value(host_key: &str, value: &str) -> Result<Vec<u8>> {
     plaintext.extend_from_slice(&Sha256::digest(host_key.as_bytes()));
     plaintext.extend_from_slice(value.as_bytes());
 
-    let ciphertext = Aes128CbcEnc::new(&key.into(), &iv.into())
-        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+    let ciphertext =
+        Aes128CbcEnc::new(&key.into(), &iv.into()).encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
 
     let mut out = Vec::with_capacity(V10_PREFIX.len() + ciphertext.len());
     out.extend_from_slice(V10_PREFIX);
