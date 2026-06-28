@@ -266,6 +266,7 @@ export function AccountCard({
   const showSubscriptionStatus = usageEnabled && account.auth_mode === "chat_g_p_t";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
   const resetCredits = account.usage?.rate_limit_reset_credits;
+  const resetFetchError = account.usage?.rate_limit_reset_error;
   const resetAvailableCount =
     resetCredits?.available_count ?? account.usage?.rate_limit_reset_available_count ?? 0;
   const availableResetCredits = (resetCredits?.credits ?? [])
@@ -286,9 +287,16 @@ export function AccountCard({
     usageEnabled &&
     account.auth_mode === "chat_g_p_t" &&
     (resetCredits != null ||
-      account.usage?.rate_limit_reset_available_count != null);
+      account.usage?.rate_limit_reset_available_count != null ||
+      resetFetchError != null);
   const canUseRateLimitReset =
-    !!onUseRateLimitReset && resetAvailableCount > 0 && !isUsingReset;
+    !!onUseRateLimitReset && !resetFetchError && resetAvailableCount > 0 && !isUsingReset;
+  const resetBadgeLabel = resetFetchError ? "Unavailable" : `${resetAvailableCount} available`;
+  const resetButtonTooltip = resetFetchError
+    ? "Usage reset status unavailable"
+    : resetAvailableCount > 0
+      ? "Use usage reset"
+      : "No usage limit resets available";
 
   const cardClassName = cn(
     "relative gap-0 p-5 transition-all duration-200",
@@ -391,8 +399,8 @@ export function AccountCard({
           >
             <div className="flex min-w-0 items-center gap-2">
               <span className="text-foreground shrink-0 font-medium">Usage resets</span>
-              <Badge variant={resetAvailableCount > 0 ? "success" : "secondary"}>
-                {resetAvailableCount} available
+              <Badge variant={!resetFetchError && resetAvailableCount > 0 ? "success" : "secondary"}>
+                {resetBadgeLabel}
               </Badge>
               <span className="min-w-0 flex-1" />
               {resetExpiryLabels.length > 0 && (
@@ -507,9 +515,7 @@ export function AccountCard({
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                {resetAvailableCount > 0
-                  ? "Use usage reset"
-                  : "No usage limit resets available"}
+                {resetButtonTooltip}
               </TooltipContent>
             </Tooltip>
           )}

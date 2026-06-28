@@ -41,6 +41,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
       credits_balance: null,
       rate_limit_reset_available_count: null,
       rate_limit_reset_credits: null,
+      rate_limit_reset_error: null,
       error: message,
     }),
     []

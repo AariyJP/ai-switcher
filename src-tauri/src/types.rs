@@ -463,6 +463,7 @@ pub struct UsageInfo {
     pub credits_balance: Option<String>,
     pub rate_limit_reset_available_count: Option<i64>,
     pub rate_limit_reset_credits: Option<CodexRateLimitResetCredits>,
+    pub rate_limit_reset_error: Option<String>,
     /// Error message if usage fetch failed
     pub error: Option<String>,
 }
@@ -483,6 +484,7 @@ impl UsageInfo {
             credits_balance: None,
             rate_limit_reset_available_count: None,
             rate_limit_reset_credits: None,
+            rate_limit_reset_error: None,
             error: Some(error),
         }
     }

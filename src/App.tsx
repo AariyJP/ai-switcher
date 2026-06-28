@@ -574,6 +574,10 @@ function App() {
         case "no_credit":
           toast.warning("No usage limit resets are available.");
           break;
+        default:
+          console.warn("Unknown usage reset outcome:", result.outcome);
+          toast("Usage reset request completed.");
+          break;
       }
     } catch (err) {
       console.error("Failed to use rate limit reset:", err);

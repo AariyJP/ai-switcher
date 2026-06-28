@@ -125,6 +125,7 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
                 credits_balance: None,
                 rate_limit_reset_available_count: None,
                 rate_limit_reset_credits: None,
+                rate_limit_reset_error: None,
                 error: Some("Usage info not available for API key accounts".to_string()),
             })
         }
@@ -343,7 +344,8 @@ async fn attach_rate_limit_reset_credits(
             usage.rate_limit_reset_credits = Some(reset_credits);
         }
         Err(err) => {
-            println!("[Usage] Failed to fetch rate limit reset credits: {err}");
+            eprintln!("[Usage] Failed to fetch rate limit reset credits: {err}");
+            usage.rate_limit_reset_error = Some(err.to_string());
         }
     }
     usage
@@ -910,6 +912,7 @@ fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPaylo
         credits_balance: credits.and_then(|c| c.balance),
         rate_limit_reset_available_count,
         rate_limit_reset_credits: None,
+        rate_limit_reset_error: None,
         error: None,
     }
 }
@@ -954,6 +957,7 @@ fn convert_claude_payload_to_usage_info(
         credits_balance,
         rate_limit_reset_available_count: None,
         rate_limit_reset_credits: None,
+        rate_limit_reset_error: None,
         error: None,
     }
 }

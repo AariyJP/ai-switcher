@@ -33,6 +33,7 @@ export interface UsageInfo {
   credits_balance: string | null;
   rate_limit_reset_available_count: number | null;
   rate_limit_reset_credits: CodexRateLimitResetCredits | null;
+  rate_limit_reset_error: string | null;
   error: string | null;
 }
 
