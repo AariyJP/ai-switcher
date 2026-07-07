@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::auth::claude_oauth::{
+    fetch_profile, normalize_subscription_type, profile_organization_type,
+};
 use crate::types::{AuthData, ClaudeDesktopCookie, ClaudeDesktopSession, StoredAccount};
 
 const OAUTH_TOKEN_CACHE_KEY: &str = "oauth:tokenCache";
@@ -15,7 +18,7 @@ const AES_GCM_TAG_LEN: usize = 16;
 #[cfg(windows)]
 const AES_256_KEY_LEN: usize = 32;
 
-pub fn import_current_claude_desktop_account(account_name: String) -> Result<StoredAccount> {
+pub async fn import_current_claude_desktop_account(account_name: String) -> Result<StoredAccount> {
     let config = read_config_json()?;
     let plaintext = decrypt_cache_field(&config, OAUTH_TOKEN_CACHE_KEY)?.with_context(|| {
         format!(
@@ -25,12 +28,15 @@ pub fn import_current_claude_desktop_account(account_name: String) -> Result<Sto
                 .unwrap_or_default()
         )
     })?;
-    let (email, plan_type) = parse_metadata(&plaintext);
+    let (email, fallback_plan_type) = parse_metadata(&plaintext);
     let session = read_current_claude_desktop_session()?;
     let oauth_token_cache_v2 = decrypt_cache_field(&config, OAUTH_TOKEN_CACHE_V2_KEY)
         .ok()
         .flatten()
         .filter(|p| !is_empty_token_cache(p));
+    let plan_type = fetch_claude_desktop_plan_type(oauth_token_cache_v2.as_deref())
+        .await
+        .or(fallback_plan_type);
     Ok(StoredAccount::new_claude_desktop(
         account_name,
         email,
@@ -39,6 +45,14 @@ pub fn import_current_claude_desktop_account(account_name: String) -> Result<Sto
         session,
         oauth_token_cache_v2,
     ))
+}
+
+pub(crate) async fn fetch_claude_desktop_plan_type(
+    oauth_token_cache_v2: Option<&str>,
+) -> Option<String> {
+    let access_token = extract_claude_desktop_token(oauth_token_cache_v2?).ok()?;
+    let profile = fetch_profile(&access_token).await?;
+    profile_organization_type(&profile).map(|value| normalize_subscription_type(&value))
 }
 
 pub fn read_current_claude_desktop_session() -> Result<ClaudeDesktopSession> {
@@ -181,6 +195,38 @@ fn config_path() -> Result<std::path::PathBuf> {
 fn is_empty_token_cache(plaintext: &str) -> bool {
     let trimmed = plaintext.trim();
     trimmed.is_empty() || trimmed == "{}"
+}
+
+pub(crate) fn extract_claude_desktop_token(cache_plaintext: &str) -> Result<String> {
+    let value: Value = serde_json::from_str(cache_plaintext)
+        .context("Failed to parse Claude Desktop token cache")?;
+    let obj = value
+        .as_object()
+        .context("Claude Desktop token cache is not a JSON object")?;
+
+    let mut fallback: Option<&Value> = None;
+    let mut preferred: Option<&Value> = None;
+    for (key, entry) in obj {
+        if entry.get("token").and_then(Value::as_str).is_none() {
+            continue;
+        }
+        if key.contains("api.anthropic.com") && key.contains("user:inference") {
+            preferred = Some(entry);
+            break;
+        }
+        if fallback.is_none() {
+            fallback = Some(entry);
+        }
+    }
+    let entry = preferred.or(fallback).context(
+        "Claude Desktop token cache does not contain an OAuth access token. Re-import the account from Claude Desktop.",
+    )?;
+
+    Ok(entry
+        .get("token")
+        .and_then(Value::as_str)
+        .context("Claude Desktop token entry is missing its access token")?
+        .to_string())
 }
 
 fn read_config_json() -> Result<Value> {

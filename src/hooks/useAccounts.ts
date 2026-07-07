@@ -111,7 +111,10 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
           return;
         }
 
-        if (options?.refreshMetadata && tool === "codex") {
+        if (
+          options?.refreshMetadata &&
+          (tool === "codex" || authMode === "claude_desktop")
+        ) {
           await runWithConcurrency(
             list,
             async (account) => {
@@ -185,7 +188,10 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     options?: { refreshMetadata?: boolean }
   ) => {
     try {
-      if (options?.refreshMetadata && tool === "codex") {
+      if (
+        options?.refreshMetadata &&
+        (tool === "codex" || authMode === "claude_desktop")
+      ) {
         try {
           await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
         } catch (err) {

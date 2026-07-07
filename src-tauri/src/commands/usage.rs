@@ -2,7 +2,8 @@
 
 use crate::api::usage::{
     consume_codex_rate_limit_reset_credit as consume_reset_credit, fetch_chatgpt_account_metadata,
-    get_account_usage, refresh_all_usage, warmup_account as send_warmup,
+    fetch_claude_desktop_account_metadata, get_account_usage, refresh_all_usage,
+    warmup_account as send_warmup,
 };
 use crate::auth::{get_account, load_accounts, refresh_chatgpt_tokens, update_account_metadata};
 use crate::types::{
@@ -31,8 +32,14 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
     let updated = match &account.auth_data {
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
-            account
+        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => account,
+        AuthData::ClaudeDesktop { .. } => {
+            let live_metadata = fetch_claude_desktop_account_metadata(&account)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            update_account_metadata(&account_id, None, None, live_metadata.plan_type, None)
+                .map_err(|e| e.to_string())?
         }
         AuthData::ChatGPT { .. } => {
             let refreshed = refresh_chatgpt_tokens(&account)
@@ -54,7 +61,7 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
     };
 
     let store = load_accounts().map_err(|e| e.to_string())?;
-    let active_id = store.active_account_id.as_deref();
+    let active_id = store.active_account_id_for_mode(updated.tool, updated.auth_mode);
     Ok(AccountInfo::from_stored(&updated, active_id))
 }
 

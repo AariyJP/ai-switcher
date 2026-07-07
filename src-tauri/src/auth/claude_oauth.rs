@@ -90,11 +90,11 @@ fn profile_account_email(profile: &Value) -> Option<String> {
         .map(String::from)
 }
 
-fn normalize_subscription_type(value: &str) -> String {
+pub(crate) fn normalize_subscription_type(value: &str) -> String {
     value.strip_prefix("claude_").unwrap_or(value).to_string()
 }
 
-fn profile_organization_type(profile: &Value) -> Option<String> {
+pub(crate) fn profile_organization_type(profile: &Value) -> Option<String> {
     profile
         .get("organization")?
         .get("organization_type")?
@@ -209,7 +209,7 @@ async fn exchange_code_for_tokens(
         .context("Failed to parse Claude token exchange response")
 }
 
-async fn fetch_profile(access_token: &str) -> Option<Value> {
+pub(crate) async fn fetch_profile(access_token: &str) -> Option<Value> {
     let client = reqwest::Client::new();
     let resp = client
         .get(PROFILE_URL)

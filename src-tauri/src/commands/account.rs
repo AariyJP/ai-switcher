@@ -168,7 +168,9 @@ pub async fn add_claude_desktop_account_from_current(name: String) -> Result<Acc
         return Err("Close Claude Desktop before importing this account.".to_string());
     }
 
-    let account = import_current_claude_desktop_account(name).map_err(|e| e.to_string())?;
+    let account = import_current_claude_desktop_account(name)
+        .await
+        .map_err(|e| e.to_string())?;
     let stored = add_account(account).map_err(|e| e.to_string())?;
 
     let store = load_accounts().map_err(|e| e.to_string())?;

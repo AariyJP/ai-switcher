@@ -15,7 +15,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use crate::auth::{
-    ensure_chatgpt_tokens_fresh, ensure_claude_tokens_fresh, refresh_chatgpt_tokens,
+    ensure_chatgpt_tokens_fresh, ensure_claude_tokens_fresh, extract_claude_desktop_token,
+    fetch_profile, normalize_subscription_type, profile_organization_type, refresh_chatgpt_tokens,
     refresh_claude_tokens, sync_active_claude_account_credentials,
 };
 use crate::types::{
@@ -47,6 +48,11 @@ const CLAUDE_DESKTOP_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 
 pub struct ChatGptAccountMetadata {
     pub plan_type: Option<String>,
     pub subscription_expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClaudeDesktopAccountMetadata {
+    pub plan_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,6 +193,32 @@ pub async fn fetch_chatgpt_account_metadata(
             .entitlement
             .as_ref()
             .and_then(|entitlement| entitlement.expires_at),
+    })
+}
+
+pub async fn fetch_claude_desktop_account_metadata(
+    account: &StoredAccount,
+) -> Result<ClaudeDesktopAccountMetadata> {
+    let AuthData::ClaudeDesktop {
+        oauth_token_cache,
+        oauth_token_cache_v2,
+        ..
+    } = &account.auth_data
+    else {
+        anyhow::bail!("Account is not a Claude Desktop account");
+    };
+    let access_token = match oauth_token_cache_v2.as_deref() {
+        Some(cache) => extract_claude_desktop_token(cache)?,
+        None => extract_claude_desktop_token(oauth_token_cache)?,
+    };
+
+    let profile = fetch_profile(&access_token)
+        .await
+        .context("Failed to fetch Claude Desktop profile")?;
+
+    Ok(ClaudeDesktopAccountMetadata {
+        plan_type: profile_organization_type(&profile)
+            .map(|value| normalize_subscription_type(&value)),
     })
 }
 
@@ -661,38 +693,6 @@ fn build_claude_warmup_payload() -> serde_json::Value {
             }
         ]
     })
-}
-
-fn extract_claude_desktop_token(cache_plaintext: &str) -> Result<String> {
-    let value: Value = serde_json::from_str(cache_plaintext)
-        .context("Failed to parse Claude Desktop token cache")?;
-    let obj = value
-        .as_object()
-        .context("Claude Desktop token cache is not a JSON object")?;
-
-    let mut fallback: Option<&Value> = None;
-    let mut preferred: Option<&Value> = None;
-    for (key, entry) in obj {
-        if entry.get("token").and_then(Value::as_str).is_none() {
-            continue;
-        }
-        if key.contains("api.anthropic.com") && key.contains("user:inference") {
-            preferred = Some(entry);
-            break;
-        }
-        if fallback.is_none() {
-            fallback = Some(entry);
-        }
-    }
-    let entry = preferred.or(fallback).context(
-        "Claude Desktop token cache does not contain an OAuth access token. Re-import the account from Claude Desktop.",
-    )?;
-
-    Ok(entry
-        .get("token")
-        .and_then(Value::as_str)
-        .context("Claude Desktop token entry is missing its access token")?
-        .to_string())
 }
 
 fn build_warmup_payload(stream: bool, include_max_output_tokens: bool) -> serde_json::Value {
