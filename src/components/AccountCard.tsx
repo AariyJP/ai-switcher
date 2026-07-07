@@ -26,6 +26,7 @@ import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card"
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { AccountUsageStats } from "@/components/AccountUsageStats";
 import { UsageBar } from "@/components/UsageBar";
 
 interface AccountCardProps {
@@ -420,6 +421,14 @@ export function AccountCard({
               </ol>
             )}
           </button>
+        )}
+
+        {usageEnabled && account.auth_mode === "chat_g_p_t" && (
+          <AccountUsageStats
+            accountId={account.id}
+            enabled={account.auth_mode === "chat_g_p_t"}
+            defaultOpen={account.is_active}
+          />
         )}
 
         <div className="flex gap-2">

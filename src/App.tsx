@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { useAccounts } from "@/hooks/useAccounts";
+import { useForceCloseCodexProcesses } from "@/hooks/useForceCloseCodexProcesses";
 import { AccountCard, AddAccountModal, AppFooter } from "@/components";
 import {
   type ActiveTool,
@@ -29,9 +30,20 @@ import {
   exportFullBackupFile,
   importFullBackupFile,
   invokeBackend,
+  isTauriRuntime,
   setWindowTheme,
 } from "@/lib/platform";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -252,6 +264,7 @@ function App() {
     Record<ToolKind, ProcessInfo | null>
   >({ codex: null, claude: null });
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isOpeningCodex, setIsOpeningCodex] = useState(false);
   const [isExportingSlim, setIsExportingSlim] = useState(false);
   const [isImportingSlim, setIsImportingSlim] = useState(false);
   const [isExportingFull, setIsExportingFull] = useState(false);
@@ -884,6 +897,33 @@ function App() {
     activeTool === "codex"
       ? "Close all Codex processes first"
       : "Close all Claude processes first";
+  const {
+    forceCloseConfirmOpen,
+    setForceCloseConfirmOpen,
+    isForceClosingCodex,
+    forceCloseCodexProcesses,
+  } = useForceCloseCodexProcesses({
+    processCount: codexProcessInfo?.count ?? 0,
+    checkProcesses,
+    showToast: showWarmupToast,
+    formatError: formatWarmupError,
+  });
+
+  const handleOpenCodexApp = async () => {
+    try {
+      setIsOpeningCodex(true);
+      await invokeBackend("open_codex_app");
+      toast.success("Codex app opened");
+      setTimeout(() => {
+        void checkProcesses();
+      }, 1500);
+    } catch (err) {
+      console.error("Failed to open Codex app:", err);
+      toast.error(`Open Codex failed: ${formatWarmupError(err)}`);
+    } finally {
+      setIsOpeningCodex(false);
+    }
+  };
 
   const sortedOtherAccounts = useMemo(() => {
     if (activeTool !== "codex") {
@@ -1018,6 +1058,30 @@ function App() {
                       {claudeProcessInfo.count} Claude running
                     </Badge>
                   )}
+                  {codexProcessInfo && hasRunningCodex && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => setForceCloseConfirmOpen(true)}
+                      disabled={isForceClosingCodex}
+                    >
+                      {isForceClosingCodex ? "Force closing..." : "Force close"}
+                    </Button>
+                  )}
+                  {activeTool === "codex" &&
+                    isTauriRuntime() &&
+                    codexProcessInfo &&
+                    !hasRunningCodex && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleOpenCodexApp}
+                        disabled={isOpeningCodex}
+                      >
+                        <Monitor data-icon="inline-start" />
+                        {isOpeningCodex ? "Opening..." : "Open Codex"}
+                      </Button>
+                    )}
                 </div>
               </div>
             </div>
@@ -1488,6 +1552,33 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={forceCloseConfirmOpen} onOpenChange={setForceCloseConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Force close running Codex processes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will force close {codexProcessInfo?.count ?? 0} Codex{" "}
+              {(codexProcessInfo?.count ?? 0) === 1 ? "process" : "processes"} that
+              currently block account switching.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <p className="text-destructive text-sm">Unsaved work may be lost.</p>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isForceClosingCodex}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={isForceClosingCodex}
+              onClick={(event) => {
+                event.preventDefault();
+                void forceCloseCodexProcesses();
+              }}
+            >
+              {isForceClosingCodex ? "Force closing..." : "Force close"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Toaster richColors position="bottom-center" />
     </div>
