@@ -38,8 +38,14 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
                 .await
                 .map_err(|e| e.to_string())?;
 
-            update_account_metadata(&account_id, None, None, live_metadata.plan_type, None)
-                .map_err(|e| e.to_string())?
+            update_account_metadata(
+                &account_id,
+                None,
+                live_metadata.email,
+                live_metadata.plan_type,
+                None,
+            )
+            .map_err(|e| e.to_string())?
         }
         AuthData::ChatGPT { .. } => {
             let refreshed = refresh_chatgpt_tokens(&account)

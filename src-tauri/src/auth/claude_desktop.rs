@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::auth::claude_oauth::{
-    fetch_profile, normalize_subscription_type, profile_organization_type,
+    fetch_profile, normalize_subscription_type, profile_account_email, profile_organization_type,
 };
 use crate::types::{AuthData, ClaudeDesktopCookie, ClaudeDesktopSession, StoredAccount};
 
@@ -28,15 +28,18 @@ pub async fn import_current_claude_desktop_account(account_name: String) -> Resu
                 .unwrap_or_default()
         )
     })?;
-    let (email, fallback_plan_type) = parse_metadata(&plaintext);
+    let (fallback_email, fallback_plan_type) = parse_metadata(&plaintext);
     let session = read_current_claude_desktop_session()?;
     let oauth_token_cache_v2 = decrypt_cache_field(&config, OAUTH_TOKEN_CACHE_V2_KEY)
         .ok()
         .flatten()
         .filter(|p| !is_empty_token_cache(p));
-    let plan_type = fetch_claude_desktop_plan_type(oauth_token_cache_v2.as_deref())
-        .await
-        .or(fallback_plan_type);
+    let profile_metadata =
+        fetch_claude_desktop_profile_metadata(&plaintext, oauth_token_cache_v2.as_deref())
+            .await
+            .unwrap_or_default();
+    let email = profile_metadata.email.or(fallback_email);
+    let plan_type = profile_metadata.plan_type.or(fallback_plan_type);
     Ok(StoredAccount::new_claude_desktop(
         account_name,
         email,
@@ -47,12 +50,26 @@ pub async fn import_current_claude_desktop_account(account_name: String) -> Resu
     ))
 }
 
-pub(crate) async fn fetch_claude_desktop_plan_type(
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ClaudeDesktopProfileMetadata {
+    pub email: Option<String>,
+    pub plan_type: Option<String>,
+}
+
+pub(crate) async fn fetch_claude_desktop_profile_metadata(
+    oauth_token_cache: &str,
     oauth_token_cache_v2: Option<&str>,
-) -> Option<String> {
-    let access_token = extract_claude_desktop_token(oauth_token_cache_v2?).ok()?;
+) -> Option<ClaudeDesktopProfileMetadata> {
+    let access_token = match oauth_token_cache_v2 {
+        Some(cache) => extract_claude_desktop_token(cache).ok()?,
+        None => extract_claude_desktop_token(oauth_token_cache).ok()?,
+    };
     let profile = fetch_profile(&access_token).await?;
-    profile_organization_type(&profile).map(|value| normalize_subscription_type(&value))
+    Some(ClaudeDesktopProfileMetadata {
+        email: profile_account_email(&profile),
+        plan_type: profile_organization_type(&profile)
+            .map(|value| normalize_subscription_type(&value)),
+    })
 }
 
 pub fn read_current_claude_desktop_session() -> Result<ClaudeDesktopSession> {

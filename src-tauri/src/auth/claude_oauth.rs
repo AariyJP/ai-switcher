@@ -82,7 +82,7 @@ struct TokenResponse {
     scope: Option<String>,
 }
 
-fn profile_account_email(profile: &Value) -> Option<String> {
+pub(crate) fn profile_account_email(profile: &Value) -> Option<String> {
     profile
         .get("account")?
         .get("email")?

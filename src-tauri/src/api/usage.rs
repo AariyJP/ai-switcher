@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use crate::auth::{
     ensure_chatgpt_tokens_fresh, ensure_claude_tokens_fresh, extract_claude_desktop_token,
-    fetch_profile, normalize_subscription_type, profile_organization_type, refresh_chatgpt_tokens,
-    refresh_claude_tokens, sync_active_claude_account_credentials,
+    fetch_claude_desktop_profile_metadata, refresh_chatgpt_tokens, refresh_claude_tokens,
+    sync_active_claude_account_credentials,
 };
 use crate::types::{
     AuthData, ClaudeCredential, ClaudeDesktopSession, CodexRateLimitResetConsumeResult,
@@ -52,6 +52,7 @@ pub struct ChatGptAccountMetadata {
 
 #[derive(Debug, Clone)]
 pub struct ClaudeDesktopAccountMetadata {
+    pub email: Option<String>,
     pub plan_type: Option<String>,
 }
 
@@ -207,18 +208,15 @@ pub async fn fetch_claude_desktop_account_metadata(
     else {
         anyhow::bail!("Account is not a Claude Desktop account");
     };
-    let access_token = match oauth_token_cache_v2.as_deref() {
-        Some(cache) => extract_claude_desktop_token(cache)?,
-        None => extract_claude_desktop_token(oauth_token_cache)?,
-    };
 
-    let profile = fetch_profile(&access_token)
-        .await
-        .context("Failed to fetch Claude Desktop profile")?;
+    let metadata =
+        fetch_claude_desktop_profile_metadata(oauth_token_cache, oauth_token_cache_v2.as_deref())
+            .await
+            .context("Failed to fetch Claude Desktop profile")?;
 
     Ok(ClaudeDesktopAccountMetadata {
-        plan_type: profile_organization_type(&profile)
-            .map(|value| normalize_subscription_type(&value)),
+        email: metadata.email,
+        plan_type: metadata.plan_type,
     })
 }
 
