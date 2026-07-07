@@ -35,6 +35,9 @@ const CHATGPT_RATE_LIMIT_RESET_CREDITS_CONSUME_API: &str =
 const OPENAI_API: &str = "https://api.openai.com/v1";
 const CODEX_USER_AGENT: &str = "codex-cli/1.0.0";
 const CLAUDE_API: &str = "https://api.anthropic.com/api";
+const CLAUDE_MESSAGES_API: &str = "https://api.anthropic.com/v1/messages";
+const CLAUDE_ANTHROPIC_VERSION: &str = "2023-06-01";
+const CLAUDE_WARMUP_MODEL: &str = "claude-haiku-4-5";
 const CLAUDE_USER_AGENT: &str = "claude-code/2.1.142";
 const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
 const CLAUDE_AI_API: &str = "https://claude.ai/api";
@@ -145,10 +148,8 @@ pub async fn warmup_account(account: &StoredAccount) -> Result<()> {
     match &account.auth_data {
         AuthData::ApiKey { key } => warmup_with_api_key(key).await,
         AuthData::ChatGPT { .. } => warmup_with_chatgpt_auth(account).await,
-        AuthData::ClaudeCode { .. } => anyhow::bail!("Claude Code accounts don't support warm-up"),
-        AuthData::ClaudeDesktop { .. } => {
-            anyhow::bail!("Claude Desktop accounts don't support warm-up")
-        }
+        AuthData::ClaudeCode { .. } => warmup_with_claude_auth(account).await,
+        AuthData::ClaudeDesktop { .. } => warmup_with_claude_desktop_auth(account).await,
     }
 }
 
@@ -557,17 +558,7 @@ async fn warmup_with_chatgpt_auth(account: &StoredAccount) -> Result<()> {
         response = send_chatgpt_warmup_request(retry_token, retry_account_id, true).await?;
     }
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        println!("[Warmup] ChatGPT warm-up error response: {body}");
-        anyhow::bail!("ChatGPT warm-up failed with status {status}");
-    }
-
-    let body = response.text().await.unwrap_or_default();
-    log_warmup_response("ChatGPT", &body, true);
-
-    Ok(())
+    finish_warmup("ChatGPT", response, true).await
 }
 
 async fn warmup_with_api_key(api_key: &str) -> Result<()> {
@@ -582,17 +573,126 @@ async fn warmup_with_api_key(api_key: &str) -> Result<()> {
         .await
         .context("Failed to send API key warm-up request")?;
 
-    if !response.status().is_success() {
-        let status = response.status();
+    finish_warmup("API key", response, false).await
+}
+
+async fn warmup_with_claude_auth(account: &StoredAccount) -> Result<()> {
+    let synced_account = sync_active_claude_account_credentials(account)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| account.clone());
+    let fresh_account = match ensure_claude_tokens_fresh(&synced_account).await {
+        Ok(account) => account,
+        Err(err) => {
+            println!(
+                "[Warmup] Claude pre-refresh failed for account {}: {}",
+                synced_account.name, err
+            );
+            synced_account.clone()
+        }
+    };
+    let oauth = extract_claude_auth(&fresh_account)?;
+
+    let response = send_claude_warmup_request(&oauth.access_token).await?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        println!(
+            "[Warmup] Unauthorized for Claude account {}, refreshing token and retrying once",
+            fresh_account.name
+        );
+        let retry_source = sync_active_claude_account_credentials(&fresh_account)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| fresh_account.clone());
+        let refreshed_account = refresh_claude_tokens(&retry_source).await?;
+        let retry_oauth = extract_claude_auth(&refreshed_account)?;
+        let retry_response = send_claude_warmup_request(&retry_oauth.access_token).await?;
+        return finish_warmup("Claude Code", retry_response, false).await;
+    }
+
+    finish_warmup("Claude Code", response, false).await
+}
+
+async fn warmup_with_claude_desktop_auth(account: &StoredAccount) -> Result<()> {
+    let AuthData::ClaudeDesktop {
+        oauth_token_cache,
+        oauth_token_cache_v2,
+        ..
+    } = &account.auth_data
+    else {
+        anyhow::bail!("Account is not a Claude Desktop account");
+    };
+    let access_token = match oauth_token_cache_v2.as_deref() {
+        Some(cache) => extract_claude_desktop_token(cache)?,
+        None => extract_claude_desktop_token(oauth_token_cache)?,
+    };
+
+    let response = send_claude_warmup_request(&access_token).await?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        anyhow::bail!(
+            "Claude Desktop token was rejected. Re-import the account from Claude Desktop."
+        );
+    }
+
+    finish_warmup("Claude Desktop", response, false).await
+}
+
+async fn finish_warmup(source: &str, response: reqwest::Response, is_sse: bool) -> Result<()> {
+    let status = response.status();
+    if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        println!("[Warmup] API key warm-up error response: {body}");
-        anyhow::bail!("API key warm-up failed with status {status}");
+        println!("[Warmup] {source} warm-up error response: {body}");
+        anyhow::bail!("{source} warm-up failed with status {status}");
     }
 
     let body = response.text().await.unwrap_or_default();
-    log_warmup_response("API key", &body, false);
-
+    log_warmup_response(source, &body, is_sse);
     Ok(())
+}
+
+fn build_claude_warmup_payload() -> serde_json::Value {
+    json!({
+        "model": CLAUDE_WARMUP_MODEL,
+        "max_tokens": 1,
+        "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hi"
+            }
+        ]
+    })
+}
+
+fn extract_claude_desktop_token(cache_plaintext: &str) -> Result<String> {
+    let value: Value = serde_json::from_str(cache_plaintext)
+        .context("Failed to parse Claude Desktop token cache")?;
+    let obj = value
+        .as_object()
+        .context("Claude Desktop token cache is not a JSON object")?;
+
+    let mut fallback: Option<&Value> = None;
+    let mut preferred: Option<&Value> = None;
+    for (key, entry) in obj {
+        if entry.get("token").and_then(Value::as_str).is_none() {
+            continue;
+        }
+        if key.contains("api.anthropic.com") && key.contains("user:inference") {
+            preferred = Some(entry);
+            break;
+        }
+        if fallback.is_none() {
+            fallback = Some(entry);
+        }
+    }
+    let entry = preferred.or(fallback).context(
+        "Claude Desktop token cache does not contain an OAuth access token. Re-import the account from Claude Desktop.",
+    )?;
+
+    Ok(entry
+        .get("token")
+        .and_then(Value::as_str)
+        .context("Claude Desktop token entry is missing its access token")?
+        .to_string())
 }
 
 fn build_warmup_payload(stream: bool, include_max_output_tokens: bool) -> serde_json::Value {
@@ -738,21 +838,31 @@ async fn send_chatgpt_rate_limit_reset_consume_request(
         .context("Failed to consume ChatGPT rate limit reset credit")
 }
 
-async fn send_claude_usage_request(access_token: &str) -> Result<reqwest::Response> {
-    let client = reqwest::Client::new();
+fn build_claude_headers(access_token: &str, with_version: bool) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
-    let url = format!("{CLAUDE_API}/oauth/usage");
-
     headers.insert(USER_AGENT, HeaderValue::from_static(CLAUDE_USER_AGENT));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {access_token}")).context("Invalid access token")?,
     );
+    if with_version {
+        headers.insert(
+            HeaderName::from_static("anthropic-version"),
+            HeaderValue::from_static(CLAUDE_ANTHROPIC_VERSION),
+        );
+    }
     headers.insert(
         HeaderName::from_static("anthropic-beta"),
         HeaderValue::from_static(CLAUDE_OAUTH_BETA),
     );
+    Ok(headers)
+}
+
+async fn send_claude_usage_request(access_token: &str) -> Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    let url = format!("{CLAUDE_API}/oauth/usage");
+    let headers = build_claude_headers(access_token, false)?;
 
     println!("[Usage] Requesting Claude usage: {url}");
 
@@ -762,6 +872,20 @@ async fn send_claude_usage_request(access_token: &str) -> Result<reqwest::Respon
         .send()
         .await
         .with_context(|| format!("Failed to send Claude usage request to {url}"))
+}
+
+async fn send_claude_warmup_request(access_token: &str) -> Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    let headers = build_claude_headers(access_token, true)?;
+    let payload = build_claude_warmup_payload();
+
+    client
+        .post(CLAUDE_MESSAGES_API)
+        .headers(headers)
+        .json(&payload)
+        .send()
+        .await
+        .context("Failed to send Claude warm-up request")
 }
 
 async fn send_chatgpt_get_request(

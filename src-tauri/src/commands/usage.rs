@@ -6,7 +6,8 @@ use crate::api::usage::{
 };
 use crate::auth::{get_account, load_accounts, refresh_chatgpt_tokens, update_account_metadata};
 use crate::types::{
-    AccountInfo, AuthData, CodexRateLimitResetConsumeResult, ToolKind, UsageInfo, WarmupSummary,
+    AccountInfo, AuthData, AuthMode, CodexRateLimitResetConsumeResult, ToolKind, UsageInfo,
+    WarmupSummary,
 };
 use futures::{stream, StreamExt};
 
@@ -92,17 +93,23 @@ pub async fn warmup_account(account_id: String) -> Result<(), String> {
 
 /// Send minimal warm-up requests for all accounts
 #[tauri::command]
-pub async fn warmup_all_accounts() -> Result<WarmupSummary, String> {
+pub async fn warmup_all_accounts(
+    tool: Option<ToolKind>,
+    auth_mode: Option<AuthMode>,
+) -> Result<WarmupSummary, String> {
+    let tool = tool.unwrap_or(ToolKind::Codex);
     let store = load_accounts().map_err(|e| e.to_string())?;
-    let codex_accounts: Vec<_> = store
+    let target_accounts: Vec<_> = store
         .accounts
         .into_iter()
-        .filter(|account| account.tool == ToolKind::Codex)
+        .filter(|account| {
+            account.tool == tool && auth_mode.map_or(true, |m| account.auth_mode == m)
+        })
         .collect();
-    let total_accounts = codex_accounts.len();
+    let total_accounts = target_accounts.len();
     let concurrency = total_accounts.min(10).max(1);
 
-    let results: Vec<(String, bool)> = stream::iter(codex_accounts.into_iter())
+    let results: Vec<(String, bool)> = stream::iter(target_accounts.into_iter())
         .map(|account| async move {
             let account_id = account.id.clone();
             let failed = send_warmup(&account).await.is_err();

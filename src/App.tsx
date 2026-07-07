@@ -866,7 +866,10 @@ function App() {
   const hasRunningCodex = !!codexProcessInfo && codexProcessInfo.count > 0;
   const hasRunningClaude = !!claudeProcessInfo && claudeProcessInfo.count > 0;
   const usageEnabled = true;
-  const warmupEnabled = activeTool === "codex";
+  const warmupEnabled =
+    activeTool === "codex" ||
+    activeTool === "claude_code" ||
+    activeTool === "claude_desktop";
   const hasRunningActiveTool =
     activeTool === "codex" ? hasRunningCodex : hasRunningClaude;
   const activeToolLabel =

@@ -226,31 +226,24 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
 
   const warmupAccount = useCallback(async (accountId: string) => {
     try {
-      if (tool !== "codex") {
-        return;
-      }
       await invokeBackend("warmup_account", { accountId });
     } catch (err) {
       console.error("Failed to warm up account:", err);
       throw err;
     }
-  }, [tool]);
+  }, []);
 
   const warmupAllAccounts = useCallback(async () => {
     try {
-      if (tool !== "codex") {
-        return {
-          total_accounts: 0,
-          warmed_accounts: 0,
-          failed_account_ids: [],
-        };
-      }
-      return await invokeBackend<WarmupSummary>("warmup_all_accounts");
+      return await invokeBackend<WarmupSummary>("warmup_all_accounts", {
+        tool,
+        authMode,
+      });
     } catch (err) {
       console.error("Failed to warm up all accounts:", err);
       throw err;
     }
-  }, [tool]);
+  }, [tool, authMode]);
 
   const useCodexRateLimitReset = useCallback(
     async (accountId: string) => {

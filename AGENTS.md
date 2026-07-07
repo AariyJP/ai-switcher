@@ -23,6 +23,14 @@
 - `src-tauri/tauri.conf.json` が基本設定で、`tauri.{macos,linux,windows}.conf.json` は platform 別の上書き設定。
 - `scripts/` には version bump、release、Tauri 実行用 shell wrapper がある。
 
+## 技術スタック
+
+- パッケージマネージャーは `pnpm` を使う。`pnpm-lock.yaml` が基準。npm / yarn は使わない。
+- フロントエンド: React 19、TypeScript ~5.8、Vite 7、Tailwind CSS v4（`@tailwindcss/vite` 経由）。
+- Tauri JS API は `@tauri-apps/api` 2.10 系。plugin は `dialog`、`opener`、`process`、`updater`。
+- バックエンド: Rust edition 2021、Tauri 2.10 系、`tokio` full、`reqwest`、`serde` / `serde_json`。
+- 認証・暗号: `chacha20poly1305`、`sha2`、`base64`、`rand`。LAN 配信の HTTP server は `tiny_http`。
+
 ## 重要な不変条件
 
 - アプリ名関連の文字列は `Cargo.toml`、`package.json`、`tauri*.conf.json`、`scripts/release.mjs`、`scripts/bump-version.mjs` で整合させる。
@@ -42,6 +50,7 @@
 ## UI / TypeScript 方針
 
 - shadcn/ui の設計に沿う。破壊的操作の確認には `AlertDialog` を使い、通常の編集・設定 modal には `Dialog` を使う。
+- Tailwind はユーティリティファーストで書く。CSS Modules は使わない。
 - ボタンや form control は既存の `src/components/ui/` と `src/lib/utils.ts` の `cn` pattern に合わせる。
 - `any`、不要な `unknown as`、不要な non-null assertion、過剰な optional chaining は避ける。型を狭める helper や既存 type を優先する。
 - Tauri API はブラウザ実行時に存在しないため、動的 import と `isTauriRuntime()` guard を使う。
@@ -50,8 +59,9 @@
 
 ## Rust / Tauri 方針
 
-- command は小さく保ち、domain ごとの file に置く。
+- command は小さく保ち、domain ごとの file に置く。Tauri command は `src-tauri/src/commands/mod.rs` から登録する。
 - account / auth / usage / process の既存 module 境界に合わせ、横断的な変更は最小限にする。
+- 認証情報の永続化は `src-tauri/src/auth/storage.rs`、切り替え処理は `auth/switcher.rs`、OAuth callback HTTP は `auth/oauth_server.rs` に置く。
 - process kill や account switch など破壊的・状態変更を伴う command は、UI 側で確認導線を用意する。
 - macOS / Windows / Linux の platform 差分は `tauri.{macos,linux,windows}.conf.json` と platform-specific module に閉じ込める。
 - `scripts/tauri.sh` は `cargo` が PATH に無い場合に `~/.cargo/env` を読み込む。Tauri command はこの wrapper 経由で実行する。
@@ -63,10 +73,13 @@
 - `pnpm tauri dev`: desktop app を開発起動する。
 - `pnpm tauri build`: production bundle を作る。出力先は `src-tauri/target/release/bundle/`。
 - `pnpm dev`: Vite frontend のみ起動する。
-- `pnpm lan`: frontend を build し、`ai-web` で LAN dashboard を配信する。
+- `pnpm lan`: frontend を build し、`ai-web` で LAN dashboard を配信する。環境変数は `AI_SWITCHER_WEB_HOST`、`AI_SWITCHER_WEB_PORT`。
+- `cargo run --manifest-path src-tauri/Cargo.toml --bin ai-web`: LAN server を直接起動する。
 - `cargo check --manifest-path src-tauri/Cargo.toml`: Rust 側の最低限の確認。
 - `cargo clippy --manifest-path src-tauri/Cargo.toml`: Rust 側の非自明な変更で使う。
 - `pnpm version:bump <semver>`: Tauri / Cargo / frontend の version を指定値に揃える。
+- `pnpm release <patch|minor|major> [-- --push]`: bump、commit、tag を行う。`--push` 指定時のみ push する。
+- project 全体の lint / format command は無い。`pnpm build` の `tsc` と、必要に応じた `cargo check` / `clippy` を使う。
 
 ## 完了確認
 

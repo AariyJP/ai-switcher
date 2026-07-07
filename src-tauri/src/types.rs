@@ -193,6 +193,7 @@ impl StoredAccount {
         plan_type: Option<String>,
         oauth_token_cache: String,
         session: ClaudeDesktopSession,
+        oauth_token_cache_v2: Option<String>,
     ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
@@ -205,6 +206,7 @@ impl StoredAccount {
             auth_data: AuthData::ClaudeDesktop {
                 oauth_token_cache,
                 session,
+                oauth_token_cache_v2,
             },
             created_at: Utc::now(),
             last_used_at: None,
@@ -259,6 +261,8 @@ pub enum AuthData {
     ClaudeDesktop {
         oauth_token_cache: String,
         session: ClaudeDesktopSession,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth_token_cache_v2: Option<String>,
     },
 }
 
