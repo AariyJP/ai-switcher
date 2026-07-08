@@ -44,11 +44,13 @@ function RateLimitBar({
   usedPercent,
   windowMinutes,
   resetsAt,
+  slim = false,
 }: {
   label: string;
   usedPercent: number;
   windowMinutes?: number | null;
   resetsAt?: number | null;
+  slim?: boolean;
 }) {
   const remainingPercent = Math.max(0, 100 - usedPercent);
   // Semantic status color: low remaining → destructive → warning → success
@@ -77,7 +79,7 @@ function RateLimitBar({
       </div>
       <Progress
         value={remainingPercent}
-        className="h-1.5"
+        className={slim ? "h-0.5" : "h-1.5"}
         indicatorClassName={cn("transition-all duration-300", indicatorClass)}
       />
     </div>
@@ -108,8 +110,12 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
     usage.primary_used_percent !== null && usage.primary_used_percent !== undefined;
   const hasSecondary =
     usage.secondary_used_percent !== null && usage.secondary_used_percent !== undefined;
+  const hasScoped =
+    usage.scoped_used_percent !== null &&
+    usage.scoped_used_percent !== undefined &&
+    !!usage.scoped_label;
 
-  if (!hasPrimary && !hasSecondary) {
+  if (!hasPrimary && !hasSecondary && !hasScoped) {
     return (
       <div className="text-muted-foreground py-1 text-xs italic">No rate limit data</div>
     );
@@ -131,6 +137,15 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
           usedPercent={usage.secondary_used_percent!}
           windowMinutes={usage.secondary_window_minutes}
           resetsAt={usage.secondary_resets_at}
+        />
+      )}
+      {hasScoped && (
+        <RateLimitBar
+          label={`Weekly Limit · ${usage.scoped_label}`}
+          usedPercent={usage.scoped_used_percent!}
+          windowMinutes={usage.scoped_window_minutes}
+          resetsAt={usage.scoped_resets_at}
+          slim
         />
       )}
       {usage.credits_balance && (

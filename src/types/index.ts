@@ -28,6 +28,10 @@ export interface UsageInfo {
   secondary_used_percent: number | null;
   secondary_window_minutes: number | null;
   secondary_resets_at: number | null;
+  scoped_used_percent: number | null;
+  scoped_window_minutes: number | null;
+  scoped_resets_at: number | null;
+  scoped_label: string | null;
   has_credits: boolean | null;
   unlimited_credits: boolean | null;
   credits_balance: string | null;
