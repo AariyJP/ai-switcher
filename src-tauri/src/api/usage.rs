@@ -109,6 +109,13 @@ struct ClaudeUsageLimit {
     resets_at: Option<i64>,
 }
 
+#[derive(Debug, Clone)]
+struct ClaudeScopedLimit {
+    used_percent: f64,
+    resets_at: Option<i64>,
+    label: Option<String>,
+}
+
 /// Get usage information for an account
 pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
     println!("[Usage] Fetching usage for account: {}", account.name);
@@ -125,6 +132,10 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
                 secondary_used_percent: None,
                 secondary_window_minutes: None,
                 secondary_resets_at: None,
+                scoped_used_percent: None,
+                scoped_window_minutes: None,
+                scoped_resets_at: None,
+                scoped_label: None,
                 has_credits: None,
                 unlimited_credits: None,
                 credits_balance: None,
@@ -957,6 +968,10 @@ fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPaylo
             .and_then(|w| w.limit_window_seconds)
             .map(|s| (i64::from(s) + 59) / 60),
         secondary_resets_at: secondary.as_ref().and_then(|w| w.reset_at),
+        scoped_used_percent: None,
+        scoped_window_minutes: None,
+        scoped_resets_at: None,
+        scoped_label: None,
         has_credits: credits.as_ref().map(|c| c.has_credits),
         unlimited_credits: credits.as_ref().map(|c| c.unlimited),
         credits_balance: credits.and_then(|c| c.balance),
@@ -975,6 +990,7 @@ fn convert_claude_payload_to_usage_info(
     let primary = extract_claude_limit(payload, "five_hour");
     let secondary = extract_claude_limit(payload, "seven_day")
         .or_else(|| extract_claude_limit(payload, "seven_day_sonnet"));
+    let scoped = extract_claude_scoped_limit(payload);
     let credits_balance = extract_claude_credits(payload);
     let usage_credits = payload.get("extra_usage");
     let has_credits = credits_balance
@@ -1002,6 +1018,10 @@ fn convert_claude_payload_to_usage_info(
         secondary_used_percent: secondary.as_ref().map(|limit| limit.used_percent),
         secondary_window_minutes: secondary.as_ref().map(|_| 7 * 24 * 60),
         secondary_resets_at: secondary.as_ref().and_then(|limit| limit.resets_at),
+        scoped_used_percent: scoped.as_ref().map(|limit| limit.used_percent),
+        scoped_window_minutes: scoped.as_ref().map(|_| 7 * 24 * 60),
+        scoped_resets_at: scoped.as_ref().and_then(|limit| limit.resets_at),
+        scoped_label: scoped.and_then(|limit| limit.label),
         has_credits,
         unlimited_credits,
         credits_balance,
@@ -1021,6 +1041,29 @@ fn extract_claude_limit(payload: &Value, key: &str) -> Option<ClaudeUsageLimit> 
     Some(ClaudeUsageLimit {
         used_percent,
         resets_at,
+    })
+}
+
+fn extract_claude_scoped_limit(payload: &Value) -> Option<ClaudeScopedLimit> {
+    let limits = payload.get("limits")?.as_array()?;
+    let entry = limits
+        .iter()
+        .find(|entry| entry.get("kind").and_then(Value::as_str) == Some("weekly_scoped"))?;
+    let used_percent = extract_claude_used_percent(entry)?;
+    let resets_at =
+        extract_timestamp_field(entry, &["resets_at", "reset_at", "resetsAt", "resetAt"]);
+    let label = entry
+        .get("scope")
+        .and_then(|scope| scope.get("model"))
+        .and_then(|model| model.get("display_name"))
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_string());
+
+    Some(ClaudeScopedLimit {
+        used_percent,
+        resets_at,
+        label,
     })
 }
 
@@ -1045,6 +1088,7 @@ fn extract_claude_used_percent(value: &Value) -> Option<f64> {
             "used_percent",
             "usedPercentage",
             "usedPercent",
+            "percent",
         ],
     )
     .map(normalize_claude_percent)

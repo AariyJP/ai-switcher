@@ -459,6 +459,14 @@ pub struct UsageInfo {
     pub secondary_window_minutes: Option<i64>,
     /// Secondary window reset timestamp (unix seconds)
     pub secondary_resets_at: Option<i64>,
+    /// Scoped (per-model) rate limit window usage (percentage 0-100)
+    pub scoped_used_percent: Option<f64>,
+    /// Scoped window duration in minutes
+    pub scoped_window_minutes: Option<i64>,
+    /// Scoped window reset timestamp (unix seconds)
+    pub scoped_resets_at: Option<i64>,
+    /// Scoped limit label (e.g. model display name)
+    pub scoped_label: Option<String>,
     /// Whether the account has credits
     pub has_credits: Option<bool>,
     /// Whether credits are unlimited
@@ -483,6 +491,10 @@ impl UsageInfo {
             secondary_used_percent: None,
             secondary_window_minutes: None,
             secondary_resets_at: None,
+            scoped_used_percent: None,
+            scoped_window_minutes: None,
+            scoped_resets_at: None,
+            scoped_label: None,
             has_credits: None,
             unlimited_credits: None,
             credits_balance: None,
