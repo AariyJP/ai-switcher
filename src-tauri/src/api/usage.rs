@@ -4,10 +4,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::{stream, StreamExt};
 use reqwest::{
-    header::{
-        HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, REFERER,
-        USER_AGENT,
-    },
+    header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT},
     StatusCode,
 };
 use serde::{Deserialize, Serialize};
@@ -20,7 +17,7 @@ use crate::auth::{
     sync_active_claude_account_credentials,
 };
 use crate::types::{
-    AuthData, ClaudeCredential, ClaudeDesktopSession, CodexRateLimitResetConsumeResult,
+    AuthData, ClaudeCredential, CodexRateLimitResetConsumeResult,
     CodexRateLimitResetCredits, CodexRateLimitResetOutcome, CreditStatusDetails, RateLimitDetails,
     RateLimitStatusPayload, RateLimitWindow, StoredAccount, UsageInfo,
 };
@@ -41,8 +38,6 @@ const CLAUDE_ANTHROPIC_VERSION: &str = "2023-06-01";
 const CLAUDE_WARMUP_MODEL: &str = "claude-haiku-4-5";
 const CLAUDE_USER_AGENT: &str = "claude-code/2.1.142";
 const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
-const CLAUDE_AI_API: &str = "https://claude.ai/api";
-const CLAUDE_DESKTOP_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 
 #[derive(Debug, Clone)]
 pub struct ChatGptAccountMetadata {
@@ -423,27 +418,24 @@ async fn parse_rate_limit_reset_consume_response(
 }
 
 async fn get_usage_with_claude_desktop_auth(account: &StoredAccount) -> Result<UsageInfo> {
-    let AuthData::ClaudeDesktop { session, .. } = &account.auth_data else {
+    let AuthData::ClaudeDesktop {
+        oauth_token_cache,
+        oauth_token_cache_v2,
+        ..
+    } = &account.auth_data
+    else {
         anyhow::bail!("Account is not a Claude Desktop account");
     };
 
-    let org_uuid = session
-        .org_uuid
-        .clone()
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            session
-                .cookies
-                .iter()
-                .find(|cookie| cookie.name == "lastActiveOrg")
-                .map(|cookie| cookie.value.clone())
-                .filter(|value| !value.is_empty())
-        })
+    let access_token = oauth_token_cache_v2
+        .as_deref()
+        .and_then(|cache| extract_claude_desktop_token(cache).ok())
+        .or_else(|| extract_claude_desktop_token(oauth_token_cache).ok())
         .context(
-            "Claude Desktop account is missing its organization id. Re-import the account from Claude Desktop.",
+            "Claude Desktop account is missing its OAuth token. Open Claude Desktop, sign in, then re-import this account.",
         )?;
 
-    let response = send_claude_desktop_usage_request(session, &org_uuid).await?;
+    let response = send_claude_usage_request(&access_token).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -460,10 +452,6 @@ async fn get_usage_with_claude_desktop_auth(account: &StoredAccount) -> Result<U
         .text()
         .await
         .context("Failed to read Claude Desktop usage response body")?;
-    println!(
-        "[Usage] Claude Desktop response body: {}",
-        &body_text[..body_text.len().min(200)]
-    );
 
     let payload: Value = serde_json::from_str(&body_text)
         .context("Failed to parse Claude Desktop usage response")?;
@@ -474,66 +462,6 @@ async fn get_usage_with_claude_desktop_auth(account: &StoredAccount) -> Result<U
     );
 
     Ok(usage)
-}
-
-async fn send_claude_desktop_usage_request(
-    session: &ClaudeDesktopSession,
-    org_uuid: &str,
-) -> Result<reqwest::Response> {
-    let client = reqwest::Client::new();
-    let url = format!("{CLAUDE_AI_API}/organizations/{org_uuid}/usage");
-
-    let mut headers = HeaderMap::new();
-    headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_static(CLAUDE_DESKTOP_USER_AGENT),
-    );
-    headers.insert(REFERER, HeaderValue::from_static("https://claude.ai/"));
-    headers.insert(
-        HeaderName::from_static("anthropic-client-platform"),
-        HeaderValue::from_static("web_claude_ai"),
-    );
-    headers.insert(
-        HeaderName::from_static("anthropic-client-version"),
-        HeaderValue::from_static("1.0.0"),
-    );
-    if let Some(device_id) = session.device_id.as_deref().filter(|s| !s.is_empty()) {
-        if let Ok(value) = HeaderValue::from_str(device_id) {
-            headers.insert(HeaderName::from_static("anthropic-device-id"), value);
-        }
-    }
-    if let Ok(cookie_header) = HeaderValue::from_str(&build_cookie_header(session)) {
-        headers.insert(COOKIE, cookie_header);
-    }
-
-    println!("[Usage] Requesting Claude Desktop usage: {url}");
-
-    client
-        .get(&url)
-        .headers(headers)
-        .send()
-        .await
-        .with_context(|| format!("Failed to send Claude Desktop usage request to {url}"))
-}
-
-fn build_cookie_header(session: &ClaudeDesktopSession) -> String {
-    let mut seen = std::collections::HashSet::new();
-    let mut parts = Vec::new();
-    for cookie in &session.cookies {
-        if cookie.name.is_empty() || cookie.value.is_empty() {
-            continue;
-        }
-        if !seen.insert(cookie.name.as_str()) {
-            continue;
-        }
-        parts.push(format!("{}={}", cookie.name, cookie.value));
-    }
-    if !seen.contains("sessionKey") && !session.session_key.is_empty() {
-        parts.push(format!("sessionKey={}", session.session_key));
-    }
-    parts.join("; ")
 }
 
 async fn parse_claude_usage_response(
@@ -1048,17 +976,17 @@ fn convert_claude_payload_to_usage_info(
     let secondary = extract_claude_limit(payload, "seven_day")
         .or_else(|| extract_claude_limit(payload, "seven_day_sonnet"));
     let credits_balance = extract_claude_credits(payload);
-    let extra_usage = payload.get("extra_usage");
+    let usage_credits = payload.get("extra_usage");
     let has_credits = credits_balance
         .as_ref()
         .map(|_| true)
         .or_else(|| {
-            extra_usage
+            usage_credits
                 .and_then(|value| value.get("is_enabled"))
                 .and_then(Value::as_bool)
         })
         .or_else(|| extract_bool_field(payload, &["has_credits", "hasCredits"]));
-    let unlimited_credits = extra_usage
+    let unlimited_credits = usage_credits
         .and_then(|value| value.get("monthly_limit"))
         .map(Value::is_null)
         .or_else(|| extract_bool_field(payload, &["unlimited_credits", "unlimitedCredits"]));
@@ -1170,19 +1098,40 @@ fn extract_claude_credits(payload: &Value) -> Option<String> {
 
     payload
         .get("extra_usage")
-        .and_then(extract_claude_extra_usage_credits)
+        .and_then(extract_claude_usage_credits)
 }
 
-fn extract_claude_extra_usage_credits(extra_usage: &Value) -> Option<String> {
-    let used = extract_value_field(extra_usage, &["used_credits", "usedCredits"])
-        .and_then(value_to_display_string)?;
-    let limit = extract_value_field(extra_usage, &["monthly_limit", "monthlyLimit"])
-        .filter(|value| !value.is_null())
-        .and_then(value_to_display_string);
+fn extract_claude_usage_credits(usage_credits: &Value) -> Option<String> {
+    let decimals = usage_credits
+        .get("decimal_places")
+        .and_then(Value::as_u64)? as usize;
+    let currency = usage_credits
+        .get("currency")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty());
 
-    limit
-        .map(|limit| format!("{used} / {limit} spent"))
-        .or_else(|| Some(format!("{used} spent")))
+    let used = extract_value_field(usage_credits, &["used_credits", "usedCredits"])
+        .and_then(|value| format_claude_credit_amount(value, decimals))?;
+    let limit = extract_value_field(usage_credits, &["monthly_limit", "monthlyLimit"])
+        .filter(|value| !value.is_null())
+        .and_then(|value| format_claude_credit_amount(value, decimals));
+
+    let amounts = match limit {
+        Some(limit) => format!("{used} / {limit}"),
+        None => used,
+    };
+
+    Some(match currency {
+        Some(currency) => format!("{amounts} {currency} spent"),
+        None => format!("{amounts} spent"),
+    })
+}
+
+fn format_claude_credit_amount(value: &Value, decimals: usize) -> Option<String> {
+    let divisor = 10f64.powi(decimals as i32);
+    value
+        .as_f64()
+        .map(|minor| format!("{:.*}", decimals, minor / divisor))
 }
 
 fn extract_value_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {

@@ -6,7 +6,6 @@ import type {
   AccountUsageStats as AccountUsageStatsInfo,
 } from "@/types";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -477,11 +476,6 @@ export function AccountUsageStats({
                 : currentStats?.source ?? "ChatGPT backend"}
               {generatedAt && ` · updated ${generatedAt}`}
             </p>
-            {currentStats?.available && (
-              <Badge variant="outline" className="hidden shrink-0 sm:inline-flex">
-                Official
-              </Badge>
-            )}
             <Button
               type="button"
               variant="outline"
