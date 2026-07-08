@@ -359,20 +359,11 @@ async fn get_usage_with_claude_auth(account: &StoredAccount) -> Result<UsageInfo
         let refreshed_account = match refresh_claude_tokens(&retry_source).await {
             Ok(account) => account,
             Err(err) => {
-                return Ok(UsageInfo::error(
-                    retry_source.id.clone(),
-                    format_claude_auth_error(&err.to_string()),
-                ));
+                return Ok(UsageInfo::error(retry_source.id.clone(), err.to_string()));
             }
         };
         let retry_oauth = extract_claude_auth(&refreshed_account)?;
         let retry_response = send_claude_usage_request(&retry_oauth.access_token).await?;
-        if retry_response.status() == StatusCode::UNAUTHORIZED {
-            return Ok(UsageInfo::error(
-                refreshed_account.id.clone(),
-                "Claude login expired. Open Claude Code and sign in again, then import the current Claude account again.".to_string(),
-            ));
-        }
         return parse_claude_usage_response(&refreshed_account, retry_oauth, retry_response).await;
     }
 
@@ -1329,18 +1320,6 @@ fn normalize_claude_timestamp(timestamp: f64) -> i64 {
         timestamp
     };
     seconds.round() as i64
-}
-
-fn format_claude_auth_error(error: &str) -> String {
-    if error.contains("invalid_grant") {
-        return "Claude refresh token is no longer valid. Open Claude Code and sign in again, then import the current Claude account again.".to_string();
-    }
-
-    if error.contains("Unauthorized") || error.contains("401") {
-        return "Claude login expired. Open Claude Code and sign in again, then import the current Claude account again.".to_string();
-    }
-
-    error.to_string()
 }
 
 async fn send_cursor_request(
