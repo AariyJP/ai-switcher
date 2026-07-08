@@ -38,6 +38,7 @@ const CLAUDE_ANTHROPIC_VERSION: &str = "2023-06-01";
 const CLAUDE_WARMUP_MODEL: &str = "claude-haiku-4-5";
 const CLAUDE_USER_AGENT: &str = "claude-code/2.1.142";
 const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
+const CURSOR_API: &str = "https://api2.cursor.sh";
 
 #[derive(Debug, Clone)]
 pub struct ChatGptAccountMetadata {
@@ -48,6 +49,11 @@ pub struct ChatGptAccountMetadata {
 #[derive(Debug, Clone)]
 pub struct ClaudeDesktopAccountMetadata {
     pub email: Option<String>,
+    pub plan_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CursorAccountMetadata {
     pub plan_type: Option<String>,
 }
 
@@ -132,12 +138,14 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
                 rate_limit_reset_available_count: None,
                 rate_limit_reset_credits: None,
                 rate_limit_reset_error: None,
+                cursor_usage: None,
                 error: Some("Usage info not available for API key accounts".to_string()),
             })
         }
         AuthData::ClaudeCode { .. } => get_usage_with_claude_auth(account).await,
         AuthData::ChatGPT { .. } => get_usage_with_chatgpt_auth(account).await,
         AuthData::ClaudeDesktop { .. } => get_usage_with_claude_desktop_auth(account).await,
+        AuthData::Cursor { .. } => get_usage_with_cursor_auth(account).await,
     }
 }
 
@@ -153,6 +161,7 @@ pub async fn warmup_account(account: &StoredAccount) -> Result<()> {
         AuthData::ChatGPT { .. } => warmup_with_chatgpt_auth(account).await,
         AuthData::ClaudeCode { .. } => warmup_with_claude_auth(account).await,
         AuthData::ClaudeDesktop { .. } => warmup_with_claude_desktop_auth(account).await,
+        AuthData::Cursor { .. } => Ok(()),
     }
 }
 
@@ -214,6 +223,56 @@ pub async fn fetch_claude_desktop_account_metadata(
         email: metadata.email,
         plan_type: metadata.plan_type,
     })
+}
+
+pub async fn fetch_cursor_account_metadata(
+    account: &StoredAccount,
+) -> Result<CursorAccountMetadata> {
+    let AuthData::Cursor { access_token, .. } = &account.auth_data else {
+        anyhow::bail!("Account is not a Cursor account");
+    };
+
+    let response = send_cursor_request(
+        "aiserver.v1.DashboardService/GetPlanInfo",
+        access_token,
+        json!({}),
+    )
+    .await?;
+    let payload = parse_cursor_response_json(response).await?;
+
+    Ok(CursorAccountMetadata {
+        plan_type: extract_cursor_plan_name(&payload).map(|plan_name| {
+            normalize_cursor_plan_type_for_storage(&plan_name)
+        }),
+    })
+}
+
+pub fn sync_cursor_account_plan_metadata(
+    account_id: &str,
+    account: &StoredAccount,
+    usage: &UsageInfo,
+) -> Result<()> {
+    if usage.error.is_some() {
+        return Ok(());
+    }
+
+    let Some(plan_name) = usage.plan_type.as_deref() else {
+        return Ok(());
+    };
+
+    let normalized = normalize_cursor_plan_type_for_storage(plan_name);
+    if account.plan_type.as_deref() == Some(normalized.as_str()) {
+        return Ok(());
+    }
+
+    crate::auth::storage::update_account_metadata(
+        account_id,
+        None,
+        None,
+        Some(normalized),
+        None,
+    )?;
+    Ok(())
 }
 
 pub async fn consume_codex_rate_limit_reset_credit(
@@ -465,6 +524,46 @@ async fn get_usage_with_claude_desktop_auth(account: &StoredAccount) -> Result<U
     Ok(usage)
 }
 
+async fn get_usage_with_cursor_auth(account: &StoredAccount) -> Result<UsageInfo> {
+    let AuthData::Cursor { access_token, .. } = &account.auth_data else {
+        anyhow::bail!("Account is not a Cursor account");
+    };
+
+    let usage_response = send_cursor_request(
+        "aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+        access_token,
+        json!({}),
+    )
+    .await?;
+    let usage_payload = parse_cursor_response_json(usage_response).await?;
+    let billing_cycle_response = send_cursor_request(
+        "aiserver.v1.DashboardService/GetCurrentBillingCycle",
+        access_token,
+        json!({}),
+    )
+    .await?;
+    let billing_payload = parse_cursor_response_json(billing_cycle_response).await?;
+    let plan_response = send_cursor_request(
+        "aiserver.v1.DashboardService/GetPlanInfo",
+        access_token,
+        json!({}),
+    )
+    .await;
+    let plan_payload = match plan_response {
+        Ok(response) => parse_cursor_response_json(response).await.unwrap_or(json!({})),
+        Err(err) => {
+            println!("[Usage] Cursor GetPlanInfo failed: {err}");
+            json!({})
+        }
+    };
+    Ok(convert_cursor_payload_to_usage_info(
+        account,
+        &usage_payload,
+        &billing_payload,
+        &plan_payload,
+    ))
+}
+
 async fn parse_claude_usage_response(
     account: &StoredAccount,
     oauth: ClaudeOauthCredentials,
@@ -687,7 +786,10 @@ fn extract_chatgpt_auth(account: &StoredAccount) -> Result<(&str, Option<&str>)>
             account_id,
             ..
         } => Ok((access_token.as_str(), account_id.as_deref())),
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ApiKey { .. }
+        | AuthData::ClaudeCode { .. }
+        | AuthData::ClaudeDesktop { .. }
+        | AuthData::Cursor { .. } => {
             anyhow::bail!("Account is not using ChatGPT OAuth")
         }
     }
@@ -698,7 +800,10 @@ fn extract_claude_auth(account: &StoredAccount) -> Result<ClaudeOauthCredentials
         AuthData::ClaudeCode { credentials, .. } => {
             find_claude_oauth_credentials(credentials).context("Claude OAuth credentials not found")
         }
-        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ApiKey { .. }
+        | AuthData::ChatGPT { .. }
+        | AuthData::ClaudeDesktop { .. }
+        | AuthData::Cursor { .. } => {
             anyhow::bail!("Account is not using Claude Code OAuth")
         }
     }
@@ -965,6 +1070,7 @@ fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPaylo
         rate_limit_reset_available_count,
         rate_limit_reset_credits: None,
         rate_limit_reset_error: None,
+        cursor_usage: None,
         error: None,
     }
 }
@@ -1012,6 +1118,7 @@ fn convert_claude_payload_to_usage_info(
         rate_limit_reset_available_count: None,
         rate_limit_reset_credits: None,
         rate_limit_reset_error: None,
+        cursor_usage: None,
         error: None,
     }
 }
@@ -1234,6 +1341,129 @@ fn format_claude_auth_error(error: &str) -> String {
     }
 
     error.to_string()
+}
+
+async fn send_cursor_request(
+    path: &str,
+    access_token: &str,
+    body: serde_json::Value,
+) -> Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    client
+        .post(format!("{CURSOR_API}/{path}"))
+        .header(USER_AGENT, HeaderValue::from_static("Cursor/3.10.20"))
+        .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+        .header(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {access_token}")).context("Invalid Cursor access token")?,
+        )
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| format!("Failed to send Cursor request to {path}"))
+}
+
+async fn parse_cursor_response_json(response: reqwest::Response) -> Result<Value> {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        anyhow::bail!("Cursor API error: {status} - {body}");
+    }
+    if body.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_str(&body).context("Failed to parse Cursor API response")
+}
+
+fn extract_cursor_json_number(value: Option<&Value>) -> Option<f64> {
+    match value? {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn extract_cursor_epoch_millis(payload: &Value, key: &str) -> Option<i64> {
+    extract_cursor_json_number(payload.get(key)).map(|value| value as i64)
+}
+
+fn extract_cursor_plan_usage_field(payload: &Value, key: &str) -> Option<f64> {
+    payload
+        .get("planUsage")
+        .and_then(|value| extract_cursor_json_number(value.get(key)))
+}
+
+fn convert_cursor_payload_to_usage_info(
+    account: &StoredAccount,
+    usage_payload: &Value,
+    billing_payload: &Value,
+    plan_payload: &Value,
+) -> UsageInfo {
+    let total_used_percent = extract_cursor_plan_usage_field(usage_payload, "totalPercentUsed");
+    let auto_composer_used_percent = extract_cursor_plan_usage_field(usage_payload, "autoPercentUsed");
+    let api_used_percent = extract_cursor_plan_usage_field(usage_payload, "apiPercentUsed");
+    let included_api_amount_cents = plan_payload
+        .get("planInfo")
+        .and_then(|value| extract_cursor_json_number(value.get("includedAmountCents")))
+        .map(|value| value as i64);
+    let resets_at_millis = extract_cursor_epoch_millis(billing_payload, "endDateEpochMillis")
+        .or_else(|| extract_cursor_epoch_millis(usage_payload, "billingCycleEnd"));
+    let starts_at_millis = extract_cursor_epoch_millis(billing_payload, "startDateEpochMillis")
+        .or_else(|| extract_cursor_epoch_millis(usage_payload, "billingCycleStart"));
+    let primary_window_minutes = match (starts_at_millis, resets_at_millis) {
+        (Some(start), Some(end)) if end > start => Some((end - start) / 1000 / 60),
+        _ => None,
+    };
+    let billing_cycle_days_remaining = resets_at_millis.map(|end| {
+        let now_millis = Utc::now().timestamp_millis();
+        ((end - now_millis).max(0) + 86_399_999) / 86_400_000
+    });
+    let plan_name = extract_cursor_plan_name(plan_payload)
+        .or_else(|| account.plan_type.clone());
+
+    UsageInfo {
+        account_id: account.id.clone(),
+        plan_type: plan_name,
+        primary_used_percent: total_used_percent,
+        primary_window_minutes,
+        primary_resets_at: resets_at_millis.map(|value| value / 1000),
+        secondary_used_percent: auto_composer_used_percent,
+        secondary_window_minutes: None,
+        secondary_resets_at: None,
+        scoped_limits: Vec::new(),
+        has_credits: None,
+        unlimited_credits: None,
+        credits_balance: None,
+        rate_limit_reset_available_count: None,
+        rate_limit_reset_credits: None,
+        rate_limit_reset_error: None,
+        cursor_usage: Some(crate::types::CursorUsageDetails {
+            total_used_percent,
+            auto_composer_used_percent,
+            api_used_percent,
+            included_api_amount_cents,
+            billing_cycle_days_remaining,
+        }),
+        error: None,
+    }
+}
+
+fn extract_cursor_plan_name(plan_payload: &Value) -> Option<String> {
+    plan_payload
+        .get("planInfo")
+        .and_then(|value| value.get("planName"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn normalize_cursor_plan_type_for_storage(plan_name: &str) -> String {
+    match plan_name.trim().to_ascii_lowercase().as_str() {
+        "pro" => "pro".to_string(),
+        "pro+" | "pro plus" => "pro_plus".to_string(),
+        "ultra" => "ultra".to_string(),
+        "free" | "hobby" => "free".to_string(),
+        other => other.replace('+', " plus").trim().replace(' ', "_"),
+    }
 }
 
 fn extract_rate_limits(

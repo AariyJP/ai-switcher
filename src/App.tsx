@@ -107,6 +107,7 @@ const ACTIVE_TOOL_TO_BACKEND: Record<
   codex: { tool: "codex" },
   claude_code: { tool: "claude", authMode: "claude_code" },
   claude_desktop: { tool: "claude", authMode: "claude_desktop" },
+  cursor: { tool: "cursor" },
 };
 type SortKey =
   | "deadline_asc"
@@ -196,7 +197,12 @@ function App() {
     if (typeof window === "undefined") return "codex";
     try {
       const saved = window.localStorage.getItem(ACTIVE_TOOL_STORAGE_KEY);
-      if (saved === "codex" || saved === "claude_code" || saved === "claude_desktop") {
+      if (
+        saved === "codex" ||
+        saved === "claude_code" ||
+        saved === "claude_desktop" ||
+        saved === "cursor"
+      ) {
         return saved;
       }
       if (saved === "claude") return "claude_code";
@@ -224,6 +230,7 @@ function App() {
     importFromFile,
     addClaudeFromCurrent,
     addClaudeDesktopFromCurrent,
+    addCursorFromCurrent,
     exportAccountsSlimText,
     importAccountsSlimText,
     startOAuthLogin,
@@ -249,7 +256,7 @@ function App() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [processInfoByTool, setProcessInfoByTool] = useState<
-    Record<ToolKind, ProcessInfo | null>
+    Record<"codex" | "claude", ProcessInfo | null>
   >({ codex: null, claude: null });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExportingSlim, setIsExportingSlim] = useState(false);
@@ -457,7 +464,12 @@ function App() {
 
   const handleSwitch = async (accountId: string) => {
     const latest = await checkProcesses();
-    if (latest && !latest[backendTarget.tool].can_switch) {
+    const activeProcessInfo =
+      latest &&
+      (backendTarget.tool === "codex" || backendTarget.tool === "claude"
+        ? latest[backendTarget.tool]
+        : null);
+    if (activeProcessInfo && !activeProcessInfo.can_switch) {
       return;
     }
 
@@ -476,7 +488,12 @@ function App() {
 
   const handleLogout = async () => {
     const latest = await checkProcesses();
-    if (latest && !latest[backendTarget.tool].can_switch) {
+    const activeProcessInfo =
+      latest &&
+      (backendTarget.tool === "codex" || backendTarget.tool === "claude"
+        ? latest[backendTarget.tool]
+        : null);
+    if (activeProcessInfo && !activeProcessInfo.can_switch) {
       return;
     }
 
@@ -871,13 +888,19 @@ function App() {
     activeTool === "claude_code" ||
     activeTool === "claude_desktop";
   const hasRunningActiveTool =
-    activeTool === "codex" ? hasRunningCodex : hasRunningClaude;
+    activeTool === "codex"
+      ? hasRunningCodex
+      : activeTool === "claude_code" || activeTool === "claude_desktop"
+        ? hasRunningClaude
+        : false;
   const activeToolLabel =
     activeTool === "codex"
       ? "Codex"
       : activeTool === "claude_code"
         ? "Claude Code"
-        : "Claude Desktop";
+        : activeTool === "claude_desktop"
+          ? "Claude Desktop"
+          : "Cursor";
   const switchDisabledLabel =
     activeTool === "codex" ? "Codex Running" : "Claude Running";
   const switchDisabledTooltip =
@@ -1166,6 +1189,9 @@ function App() {
               <TabsTrigger value="claude_desktop" disabled={isRefreshing}>
                 Claude Desktop
               </TabsTrigger>
+              <TabsTrigger value="cursor" disabled={isRefreshing}>
+                Cursor
+              </TabsTrigger>
             </TabsList>
           </div>
         </Tabs>
@@ -1195,7 +1221,9 @@ function App() {
                   ? "Codex"
                   : activeTool === "claude_code"
                     ? "Claude Code"
-                    : "Claude Desktop"}{" "}
+                    : activeTool === "claude_desktop"
+                      ? "Claude Desktop"
+                      : "Cursor"}{" "}
                 account to get started
               </EmptyDescription>
             </EmptyHeader>
@@ -1407,6 +1435,7 @@ function App() {
         onImportFile={importFromFile}
         onAddClaudeFromCurrent={addClaudeFromCurrent}
         onAddClaudeDesktopFromCurrent={addClaudeDesktopFromCurrent}
+        onAddCursorFromCurrent={addCursorFromCurrent}
         claudeDesktopImportBlocked={activeTool === "claude_desktop" && hasRunningClaude}
         onStartOAuth={startOAuthLogin}
         onCompleteOAuth={completeOAuthLogin}

@@ -43,6 +43,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
       rate_limit_reset_available_count: null,
       rate_limit_reset_credits: null,
       rate_limit_reset_error: null,
+      cursor_usage: null,
       error: message,
     }),
     []
@@ -114,7 +115,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
 
         if (
           options?.refreshMetadata &&
-          (tool === "codex" || authMode === "claude_desktop")
+          (tool === "codex" || authMode === "claude_desktop" || tool === "cursor")
         ) {
           await runWithConcurrency(
             list,
@@ -191,7 +192,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     try {
       if (
         options?.refreshMetadata &&
-        (tool === "codex" || authMode === "claude_desktop")
+        (tool === "codex" || authMode === "claude_desktop" || tool === "cursor")
       ) {
         try {
           await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
@@ -365,6 +366,23 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     [loadAccounts, refreshUsage, tool, authMode, toolKey]
   );
 
+  const addCursorFromCurrent = useCallback(
+    async (name: string) => {
+      try {
+        if (tool !== "cursor") {
+          throw new Error("Cursor import is only available on the Cursor tab");
+        }
+        await invokeBackend<AccountInfo>("add_cursor_account_from_current", { name });
+        const accountList = await loadAccounts();
+        fetchedToolsRef.current.add(toolKey);
+        await refreshUsage(accountList);
+      } catch (err) {
+        throw err;
+      }
+    },
+    [loadAccounts, refreshUsage, tool, toolKey]
+  );
+
   const startOAuthLogin = useCallback(async (accountName: string) => {
     try {
       const info = await invokeBackend<{ auth_url: string; callback_port: number }>(
@@ -483,6 +501,8 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     const command =
       tool === "codex"
         ? "codex_logout"
+        : tool === "cursor"
+          ? "cursor_logout"
         : authMode === "claude_desktop"
           ? "claude_desktop_logout"
           : "claude_code_logout";
@@ -512,8 +532,12 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     setAccounts([]);
-    loadAccounts().then((accountList) => {
+    void loadAccounts().then((accountList) => {
+      if (cancelled) {
+        return;
+      }
       if (fetchedToolsRef.current.has(toolKey)) {
         return;
       }
@@ -521,8 +545,16 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
         return;
       }
       fetchedToolsRef.current.add(toolKey);
-      refreshUsage(accountList);
+      void refreshUsage(accountList).catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        console.error("Failed to refresh usage on initial load:", err);
+      });
     });
+    return () => {
+      cancelled = true;
+    };
   }, [loadAccounts, refreshUsage, toolKey]);
 
   return {
@@ -541,6 +573,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     importFromFile,
     addClaudeFromCurrent,
     addClaudeDesktopFromCurrent,
+    addCursorFromCurrent,
     exportAccountsSlimText,
     importAccountsSlimText,
     exportAccountsFullEncryptedFile,

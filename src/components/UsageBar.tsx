@@ -106,6 +106,55 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
     );
   }
 
+  const cursorUsage = usage.cursor_usage;
+  if (cursorUsage) {
+    const totalUsedPercent =
+      cursorUsage.total_used_percent ?? usage.primary_used_percent;
+    const autoUsedPercent = cursorUsage.auto_composer_used_percent;
+    const apiUsedPercent = cursorUsage.api_used_percent;
+
+    if (
+      totalUsedPercent == null &&
+      autoUsedPercent == null &&
+      apiUsedPercent == null
+    ) {
+      return (
+        <div className="text-muted-foreground py-1 text-xs italic">No usage data</div>
+      );
+    }
+
+    return (
+      <div className="flex flex-col gap-2">
+        {totalUsedPercent != null && (
+          <RateLimitBar
+            label="Total"
+            usedPercent={totalUsedPercent}
+            windowMinutes={usage.primary_window_minutes}
+            resetsAt={usage.primary_resets_at}
+          />
+        )}
+        {autoUsedPercent != null && (
+          <RateLimitBar
+            label="Auto + Composer"
+            usedPercent={autoUsedPercent}
+            windowMinutes={usage.primary_window_minutes}
+            resetsAt={usage.primary_resets_at}
+            slim
+          />
+        )}
+        {apiUsedPercent != null && (
+          <RateLimitBar
+            label="API"
+            usedPercent={apiUsedPercent}
+            windowMinutes={usage.primary_window_minutes}
+            resetsAt={usage.primary_resets_at}
+            slim
+          />
+        )}
+      </div>
+    );
+  }
+
   const hasPrimary =
     usage.primary_used_percent !== null && usage.primary_used_percent !== undefined;
   const hasSecondary =

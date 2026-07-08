@@ -10,6 +10,7 @@ use uuid::Uuid;
 pub enum ToolKind {
     Codex,
     Claude,
+    Cursor,
 }
 
 impl Default for ToolKind {
@@ -31,6 +32,8 @@ pub struct AccountsStore {
     pub active_claude_account_id: Option<String>,
     #[serde(default)]
     pub active_claude_desktop_account_id: Option<String>,
+    #[serde(default)]
+    pub active_cursor_account_id: Option<String>,
     /// Set of account IDs that are masked (hidden)
     #[serde(default)]
     pub masked_account_ids: Vec<String>,
@@ -44,6 +47,7 @@ impl Default for AccountsStore {
             active_account_id: None,
             active_claude_account_id: None,
             active_claude_desktop_account_id: None,
+            active_cursor_account_id: None,
             masked_account_ids: Vec::new(),
         }
     }
@@ -54,6 +58,7 @@ impl AccountsStore {
         match tool {
             ToolKind::Codex => self.active_account_id.as_deref(),
             ToolKind::Claude => self.active_claude_account_id.as_deref(),
+            ToolKind::Cursor => self.active_cursor_account_id.as_deref(),
         }
     }
 
@@ -64,6 +69,7 @@ impl AccountsStore {
                 self.active_claude_desktop_account_id.as_deref()
             }
             (ToolKind::Claude, _) => self.active_claude_account_id.as_deref(),
+            (ToolKind::Cursor, _) => self.active_cursor_account_id.as_deref(),
         }
     }
 
@@ -71,6 +77,7 @@ impl AccountsStore {
         match tool {
             ToolKind::Codex => self.active_account_id = account_id,
             ToolKind::Claude => self.active_claude_account_id = account_id,
+            ToolKind::Cursor => self.active_cursor_account_id = account_id,
         }
     }
 
@@ -86,6 +93,7 @@ impl AccountsStore {
                 self.active_claude_desktop_account_id = account_id
             }
             (ToolKind::Claude, _) => self.active_claude_account_id = account_id,
+            (ToolKind::Cursor, _) => self.active_cursor_account_id = account_id,
         }
     }
 }
@@ -212,6 +220,30 @@ impl StoredAccount {
             last_used_at: None,
         }
     }
+
+    pub fn new_cursor(
+        name: String,
+        email: Option<String>,
+        plan_type: Option<String>,
+        access_token: String,
+        refresh_token: String,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            name,
+            email,
+            plan_type,
+            subscription_expires_at: None,
+            tool: ToolKind::Cursor,
+            auth_mode: AuthMode::Cursor,
+            auth_data: AuthData::Cursor {
+                access_token,
+                refresh_token,
+            },
+            created_at: Utc::now(),
+            last_used_at: None,
+        }
+    }
 }
 
 /// Authentication mode
@@ -224,6 +256,7 @@ pub enum AuthMode {
     ChatGPT,
     ClaudeCode,
     ClaudeDesktop,
+    Cursor,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,6 +296,10 @@ pub enum AuthData {
         session: ClaudeDesktopSession,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         oauth_token_cache_v2: Option<String>,
+    },
+    Cursor {
+        access_token: String,
+        refresh_token: String,
     },
 }
 
@@ -419,7 +456,8 @@ impl AccountInfo {
             }
             AuthData::ApiKey { .. }
             | AuthData::ClaudeCode { .. }
-            | AuthData::ClaudeDesktop { .. } => None,
+            | AuthData::ClaudeDesktop { .. }
+            | AuthData::Cursor { .. } => None,
         };
 
         Self {
@@ -446,6 +484,16 @@ pub struct ScopedLimit {
     pub window_minutes: Option<i64>,
     pub resets_at: Option<i64>,
     pub label: Option<String>,
+}
+
+/// Cursor-specific usage pool details from the dashboard API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorUsageDetails {
+    pub total_used_percent: Option<f64>,
+    pub auto_composer_used_percent: Option<f64>,
+    pub api_used_percent: Option<f64>,
+    pub included_api_amount_cents: Option<i64>,
+    pub billing_cycle_days_remaining: Option<i64>,
 }
 
 /// Usage information for an account
@@ -478,6 +526,8 @@ pub struct UsageInfo {
     pub rate_limit_reset_available_count: Option<i64>,
     pub rate_limit_reset_credits: Option<CodexRateLimitResetCredits>,
     pub rate_limit_reset_error: Option<String>,
+    #[serde(default)]
+    pub cursor_usage: Option<CursorUsageDetails>,
     /// Error message if usage fetch failed
     pub error: Option<String>,
 }
@@ -500,6 +550,7 @@ impl UsageInfo {
             rate_limit_reset_available_count: None,
             rate_limit_reset_credits: None,
             rate_limit_reset_error: None,
+            cursor_usage: None,
             error: Some(error),
         }
     }

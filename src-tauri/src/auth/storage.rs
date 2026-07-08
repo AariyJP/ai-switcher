@@ -255,7 +255,10 @@ pub fn update_account_chatgpt_tokens(
                 *stored_account_id = Some(new_account_id);
             }
         }
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ApiKey { .. }
+        | AuthData::ClaudeCode { .. }
+        | AuthData::ClaudeDesktop { .. }
+        | AuthData::Cursor { .. } => {
             anyhow::bail!("Cannot update OAuth tokens for an API key account");
         }
     }
@@ -296,7 +299,10 @@ pub fn update_account_claude_credentials(
         } => {
             *stored_credentials = credentials;
         }
-        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ApiKey { .. }
+        | AuthData::ChatGPT { .. }
+        | AuthData::ClaudeDesktop { .. }
+        | AuthData::Cursor { .. } => {
             anyhow::bail!("Cannot update Claude credentials for a non-Claude account");
         }
     }

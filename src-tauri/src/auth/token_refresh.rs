@@ -51,7 +51,10 @@ struct ClaudeRefreshTarget {
 /// Returns an updated account when a refresh was performed.
 pub async fn ensure_chatgpt_tokens_fresh(account: &StoredAccount) -> Result<StoredAccount> {
     match &account.auth_data {
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ApiKey { .. }
+        | AuthData::ClaudeCode { .. }
+        | AuthData::ClaudeDesktop { .. }
+        | AuthData::Cursor { .. } => {
             Ok(account.clone())
         }
         AuthData::ChatGPT { access_token, .. } => {
@@ -99,7 +102,10 @@ pub fn sync_active_claude_account_credentials(
 /// Force-refresh ChatGPT OAuth tokens for an account.
 pub async fn refresh_chatgpt_tokens(account: &StoredAccount) -> Result<StoredAccount> {
     let (current_id_token, current_refresh_token, current_account_id) = match &account.auth_data {
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ApiKey { .. }
+        | AuthData::ClaudeCode { .. }
+        | AuthData::ClaudeDesktop { .. }
+        | AuthData::Cursor { .. } => {
             return Ok(account.clone())
         }
         AuthData::ChatGPT {

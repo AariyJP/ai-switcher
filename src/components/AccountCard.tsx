@@ -251,7 +251,11 @@ export function AccountCard({
     }
   };
 
-  const normalizedPlanType = account.plan_type?.trim();
+  const normalizedPlanType = (
+    account.auth_mode === "cursor"
+      ? account.usage?.plan_type ?? account.plan_type
+      : account.plan_type
+  )?.trim();
   const planKey = normalizedPlanType?.toLowerCase() || "api_key";
   const planDisplay = normalizedPlanType
     ? normalizedPlanType.charAt(0).toUpperCase() + normalizedPlanType.slice(1)
