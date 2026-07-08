@@ -29,6 +29,7 @@ interface AddAccountModalProps {
   onImportFile: (source: FileSource, name: string) => Promise<void>;
   onAddClaudeFromCurrent: (name: string) => Promise<void>;
   onAddClaudeDesktopFromCurrent: (name: string) => Promise<void>;
+  onAddCursorFromCurrent: (name: string) => Promise<void>;
   claudeDesktopImportBlocked?: boolean;
   onStartOAuth: (name: string) => Promise<{ auth_url: string }>;
   onCompleteOAuth: () => Promise<unknown>;
@@ -48,6 +49,7 @@ export function AddAccountModal({
   onImportFile,
   onAddClaudeFromCurrent,
   onAddClaudeDesktopFromCurrent,
+  onAddCursorFromCurrent,
   claudeDesktopImportBlocked = false,
   onStartOAuth,
   onCompleteOAuth,
@@ -199,6 +201,22 @@ export function AddAccountModal({
     }
   };
 
+  const handleAddCursor = async () => {
+    if (!name.trim()) {
+      setError("Please enter an account name");
+      return;
+    }
+    try {
+      setLoading(true);
+      setError(null);
+      await onAddCursorFromCurrent(name.trim());
+      handleClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setLoading(false);
+    }
+  };
+
   const renderOAuthTab = () => (
     <div className="text-muted-foreground text-sm">
       {oauthPending ? (
@@ -289,7 +307,9 @@ export function AddAccountModal({
         ? isClaudeCodeOAuthMode
           ? handleOAuthLogin
           : handleAddClaudeCode
-        : handleAddClaudeDesktop;
+        : activeTool === "claude_desktop"
+          ? handleAddClaudeDesktop
+          : handleAddCursor;
 
   const primaryLabel = loading
     ? "Adding..."
@@ -301,14 +321,18 @@ export function AddAccountModal({
         ? isClaudeCodeOAuthMode
           ? "Generate Login Link"
           : "Import Current Login"
-        : "Import from Claude Desktop";
+        : activeTool === "claude_desktop"
+          ? "Import from Claude Desktop"
+          : "Import Current Cursor Login";
 
   const dialogTitle =
     activeTool === "codex"
       ? "Add Codex Account"
       : activeTool === "claude_code"
         ? "Add Claude Code Account"
-        : "Add Claude Desktop Account";
+        : activeTool === "claude_desktop"
+          ? "Add Claude Desktop Account"
+          : "Add Cursor Account";
 
   return (
     <Dialog
@@ -413,7 +437,7 @@ export function AddAccountModal({
               {renderError()}
             </FieldGroup>
           </Tabs>
-        ) : (
+        ) : activeTool === "claude_desktop" ? (
           <FieldGroup className="pt-2">
             {renderNameField()}
             <p className="text-muted-foreground text-sm">
@@ -429,6 +453,15 @@ export function AddAccountModal({
                 </AlertDescription>
               </Alert>
             )}
+            {renderError()}
+          </FieldGroup>
+        ) : (
+          <FieldGroup className="pt-2">
+            {renderNameField()}
+            <p className="text-muted-foreground text-sm">
+              Import the Cursor login currently active on this device. AI Switcher
+              can read usage from Cursor's authenticated dashboard API.
+            </p>
             {renderError()}
           </FieldGroup>
         )}

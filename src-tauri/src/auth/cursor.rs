@@ -1,0 +1,119 @@
+use anyhow::{Context, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+
+use crate::types::{AuthData, StoredAccount};
+
+const CURSOR_ACCESS_TOKEN_KEY: &str = "cursorAuth/accessToken";
+const CURSOR_REFRESH_TOKEN_KEY: &str = "cursorAuth/refreshToken";
+const CURSOR_EMAIL_KEY: &str = "cursorAuth/cachedEmail";
+const CURSOR_PLAN_KEY: &str = "cursorAuth/stripeMembershipType";
+
+pub fn import_current_cursor_account(account_name: String) -> Result<StoredAccount> {
+    let conn = open_cursor_state_db()?;
+    let access_token = read_state_value(&conn, CURSOR_ACCESS_TOKEN_KEY)?
+        .filter(|value| !value.trim().is_empty())
+        .context("Cursor access token was not found. Sign in to Cursor first.")?;
+    let refresh_token = read_state_value(&conn, CURSOR_REFRESH_TOKEN_KEY)?
+        .filter(|value| !value.trim().is_empty())
+        .context("Cursor refresh token was not found. Sign in to Cursor first.")?;
+    let email = read_state_value(&conn, CURSOR_EMAIL_KEY)?;
+    let plan_type = read_state_value(&conn, CURSOR_PLAN_KEY)?;
+
+    Ok(StoredAccount::new_cursor(
+        account_name,
+        email,
+        plan_type,
+        access_token,
+        refresh_token,
+    ))
+}
+
+pub fn switch_to_cursor_account(account: &StoredAccount) -> Result<()> {
+    let AuthData::Cursor {
+        access_token,
+        refresh_token,
+    } = &account.auth_data
+    else {
+        anyhow::bail!("Account is not a Cursor account");
+    };
+
+    let conn = open_cursor_state_db()?;
+    write_state_value(&conn, CURSOR_ACCESS_TOKEN_KEY, access_token)?;
+    write_state_value(&conn, CURSOR_REFRESH_TOKEN_KEY, refresh_token)?;
+    if let Some(email) = account.email.as_deref() {
+        write_state_value(&conn, CURSOR_EMAIL_KEY, email)?;
+    }
+    if let Some(plan_type) = account.plan_type.as_deref() {
+        write_state_value(&conn, CURSOR_PLAN_KEY, plan_type)?;
+    }
+    Ok(())
+}
+
+pub fn logout_cursor() -> Result<()> {
+    let conn = open_cursor_state_db()?;
+    delete_state_value(&conn, CURSOR_ACCESS_TOKEN_KEY)?;
+    delete_state_value(&conn, CURSOR_REFRESH_TOKEN_KEY)?;
+    Ok(())
+}
+
+fn read_state_value(conn: &Connection, key: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM ItemTable WHERE key = ?1",
+        params![key],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .context("Failed to read Cursor state value")
+}
+
+fn write_state_value(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )
+    .with_context(|| format!("Failed to update Cursor state key `{key}`"))?;
+    Ok(())
+}
+
+fn delete_state_value(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM ItemTable WHERE key = ?1", params![key])
+        .with_context(|| format!("Failed to clear Cursor state key `{key}`"))?;
+    Ok(())
+}
+
+fn open_cursor_state_db() -> Result<Connection> {
+    let path = cursor_state_db_path()?;
+    if !path.exists() {
+        anyhow::bail!(
+            "Cursor state DB not found: {}. Launch Cursor and sign in at least once.",
+            path.display()
+        );
+    }
+    let conn = Connection::open(path).context("Failed to open Cursor state DB")?;
+    conn.busy_timeout(std::time::Duration::from_secs(2))
+        .context("Failed to set Cursor state DB busy timeout")?;
+    Ok(conn)
+}
+
+fn cursor_state_db_path() -> Result<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = dirs::home_dir().context("Could not find home directory")?;
+        return Ok(home.join(
+            "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var_os("APPDATA").context("APPDATA env var not set")?;
+        return Ok(std::path::PathBuf::from(appdata).join("Cursor/User/globalStorage/state.vscdb"));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let home = dirs::home_dir().context("Could not find home directory")?;
+        return Ok(home.join(".config/Cursor/User/globalStorage/state.vscdb"));
+    }
+}

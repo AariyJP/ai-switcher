@@ -93,6 +93,18 @@ impl ToolKind {
                 windows_app_server_marker: None,
                 windows_bundled_cli_marker: None,
             },
+            ToolKind::Cursor => ToolPatterns {
+                cli_token: "cursor",
+                desktop_macos_marker: ".app/Contents/MacOS/Cursor",
+                desktop_macos_process_name: "Cursor",
+                desktop_macos_excludes: &["Cursor Helper"],
+                bg_helper_markers: &[],
+                ide_plugin_markers: &[".antigravity", ".vscode"],
+                self_marker: "ai-switcher",
+                windows_exe_lc: "cursor.exe",
+                windows_app_server_marker: None,
+                windows_bundled_cli_marker: None,
+            },
         }
     }
 }

@@ -1,10 +1,15 @@
 // Types matching the Rust backend
 
-export type ToolKind = "codex" | "claude";
+export type ToolKind = "codex" | "claude" | "cursor";
 
-export type AuthMode = "api_key" | "chat_g_p_t" | "claude_code" | "claude_desktop";
+export type AuthMode =
+  | "api_key"
+  | "chat_g_p_t"
+  | "claude_code"
+  | "claude_desktop"
+  | "cursor";
 
-export type ActiveTool = "codex" | "claude_code" | "claude_desktop";
+export type ActiveTool = "codex" | "claude_code" | "claude_desktop" | "cursor";
 
 export interface AccountInfo {
   id: string;
@@ -26,6 +31,14 @@ export interface ScopedLimit {
   label: string | null;
 }
 
+export interface CursorUsageDetails {
+  total_used_percent: number | null;
+  auto_composer_used_percent: number | null;
+  api_used_percent: number | null;
+  included_api_amount_cents: number | null;
+  billing_cycle_days_remaining: number | null;
+}
+
 export interface UsageInfo {
   account_id: string;
   plan_type: string | null;
@@ -42,6 +55,7 @@ export interface UsageInfo {
   rate_limit_reset_available_count: number | null;
   rate_limit_reset_credits: CodexRateLimitResetCredits | null;
   rate_limit_reset_error: string | null;
+  cursor_usage?: CursorUsageDetails | null;
   error: string | null;
 }
 
