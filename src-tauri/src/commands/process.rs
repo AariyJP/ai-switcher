@@ -99,7 +99,7 @@ impl ToolKind {
                 desktop_macos_process_name: "Cursor",
                 desktop_macos_excludes: &["Cursor Helper"],
                 bg_helper_markers: &[],
-                ide_plugin_markers: &[".antigravity", ".vscode"],
+                ide_plugin_markers: &[],
                 self_marker: "ai-switcher",
                 windows_exe_lc: "cursor.exe",
                 windows_app_server_marker: None,
