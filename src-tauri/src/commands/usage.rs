@@ -23,7 +23,7 @@ pub async fn get_usage(account_id: String) -> Result<UsageInfo, String> {
 
     if matches!(&account.auth_data, AuthData::Cursor { .. }) {
         if let Err(err) = sync_cursor_account_plan_metadata(&account_id, &account, &usage) {
-            eprintln!("[Usage] Failed to sync Cursor plan metadata: {err}");
+            println!("[Usage] Failed to sync Cursor plan metadata: {err}");
         }
     }
 

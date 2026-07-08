@@ -368,17 +368,13 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
 
   const addCursorFromCurrent = useCallback(
     async (name: string) => {
-      try {
-        if (tool !== "cursor") {
-          throw new Error("Cursor import is only available on the Cursor tab");
-        }
-        await invokeBackend<AccountInfo>("add_cursor_account_from_current", { name });
-        const accountList = await loadAccounts();
-        fetchedToolsRef.current.add(toolKey);
-        await refreshUsage(accountList);
-      } catch (err) {
-        throw err;
+      if (tool !== "cursor") {
+        throw new Error("Cursor import is only available on the Cursor tab");
       }
+      await invokeBackend<AccountInfo>("add_cursor_account_from_current", { name });
+      const accountList = await loadAccounts();
+      fetchedToolsRef.current.add(toolKey);
+      await refreshUsage(accountList);
     },
     [loadAccounts, refreshUsage, tool, toolKey]
   );
