@@ -442,7 +442,7 @@ export function AccountUsageStats({
   const thirtyDayTokens = currentStats ? sumDays(currentStats.daily, 30) : null;
 
   return (
-    <div className="border-border mt-4 border-t pt-3">
+    <div className="border-border border-t pt-3">
       <Button
         type="button"
         variant="ghost"
