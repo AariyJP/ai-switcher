@@ -19,6 +19,13 @@ export interface AccountInfo {
   last_used_at: string | null;
 }
 
+export interface ScopedLimit {
+  used_percent: number;
+  window_minutes: number | null;
+  resets_at: number | null;
+  label: string | null;
+}
+
 export interface UsageInfo {
   account_id: string;
   plan_type: string | null;
@@ -28,10 +35,7 @@ export interface UsageInfo {
   secondary_used_percent: number | null;
   secondary_window_minutes: number | null;
   secondary_resets_at: number | null;
-  scoped_used_percent: number | null;
-  scoped_window_minutes: number | null;
-  scoped_resets_at: number | null;
-  scoped_label: string | null;
+  scoped_limits: ScopedLimit[];
   has_credits: boolean | null;
   unlimited_credits: boolean | null;
   credits_balance: string | null;
