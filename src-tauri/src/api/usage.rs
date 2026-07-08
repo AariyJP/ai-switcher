@@ -19,7 +19,7 @@ use crate::auth::{
 use crate::types::{
     AuthData, ClaudeCredential, CodexRateLimitResetConsumeResult,
     CodexRateLimitResetCredits, CodexRateLimitResetOutcome, CreditStatusDetails, RateLimitDetails,
-    RateLimitStatusPayload, RateLimitWindow, StoredAccount, UsageInfo,
+    RateLimitStatusPayload, RateLimitWindow, ScopedLimit, StoredAccount, UsageInfo,
 };
 
 const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
@@ -109,13 +109,6 @@ struct ClaudeUsageLimit {
     resets_at: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
-struct ClaudeScopedLimit {
-    used_percent: f64,
-    resets_at: Option<i64>,
-    label: Option<String>,
-}
-
 /// Get usage information for an account
 pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
     println!("[Usage] Fetching usage for account: {}", account.name);
@@ -132,10 +125,7 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
                 secondary_used_percent: None,
                 secondary_window_minutes: None,
                 secondary_resets_at: None,
-                scoped_used_percent: None,
-                scoped_window_minutes: None,
-                scoped_resets_at: None,
-                scoped_label: None,
+                scoped_limits: Vec::new(),
                 has_credits: None,
                 unlimited_credits: None,
                 credits_balance: None,
@@ -968,10 +958,7 @@ fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPaylo
             .and_then(|w| w.limit_window_seconds)
             .map(|s| (i64::from(s) + 59) / 60),
         secondary_resets_at: secondary.as_ref().and_then(|w| w.reset_at),
-        scoped_used_percent: None,
-        scoped_window_minutes: None,
-        scoped_resets_at: None,
-        scoped_label: None,
+        scoped_limits: Vec::new(),
         has_credits: credits.as_ref().map(|c| c.has_credits),
         unlimited_credits: credits.as_ref().map(|c| c.unlimited),
         credits_balance: credits.and_then(|c| c.balance),
@@ -990,7 +977,7 @@ fn convert_claude_payload_to_usage_info(
     let primary = extract_claude_limit(payload, "five_hour");
     let secondary = extract_claude_limit(payload, "seven_day")
         .or_else(|| extract_claude_limit(payload, "seven_day_sonnet"));
-    let scoped = extract_claude_scoped_limit(payload);
+    let scoped_limits = extract_claude_scoped_limits(payload);
     let credits_balance = extract_claude_credits(payload);
     let usage_credits = payload.get("extra_usage");
     let has_credits = credits_balance
@@ -1018,10 +1005,7 @@ fn convert_claude_payload_to_usage_info(
         secondary_used_percent: secondary.as_ref().map(|limit| limit.used_percent),
         secondary_window_minutes: secondary.as_ref().map(|_| 7 * 24 * 60),
         secondary_resets_at: secondary.as_ref().and_then(|limit| limit.resets_at),
-        scoped_used_percent: scoped.as_ref().map(|limit| limit.used_percent),
-        scoped_window_minutes: scoped.as_ref().map(|_| 7 * 24 * 60),
-        scoped_resets_at: scoped.as_ref().and_then(|limit| limit.resets_at),
-        scoped_label: scoped.and_then(|limit| limit.label),
+        scoped_limits,
         has_credits,
         unlimited_credits,
         credits_balance,
@@ -1034,7 +1018,7 @@ fn convert_claude_payload_to_usage_info(
 
 fn extract_claude_limit(payload: &Value, key: &str) -> Option<ClaudeUsageLimit> {
     let value = payload.get(key)?;
-    let used_percent = extract_claude_used_percent(value)?;
+    let used_percent = extract_claude_limit_percent(value)?;
     let resets_at =
         extract_timestamp_field(value, &["resets_at", "reset_at", "resetsAt", "resetAt"]);
 
@@ -1044,32 +1028,47 @@ fn extract_claude_limit(payload: &Value, key: &str) -> Option<ClaudeUsageLimit> 
     })
 }
 
-fn extract_claude_scoped_limit(payload: &Value) -> Option<ClaudeScopedLimit> {
-    let limits = payload.get("limits")?.as_array()?;
-    let entry = limits
-        .iter()
-        .find(|entry| entry.get("kind").and_then(Value::as_str) == Some("weekly_scoped"))?;
-    let used_percent = extract_claude_used_percent(entry)?;
-    let resets_at =
-        extract_timestamp_field(entry, &["resets_at", "reset_at", "resetsAt", "resetAt"]);
-    let label = entry
-        .get("scope")
-        .and_then(|scope| scope.get("model"))
-        .and_then(|model| model.get("display_name"))
-        .and_then(Value::as_str)
-        .filter(|name| !name.is_empty())
-        .map(|name| name.to_string());
+fn extract_claude_scoped_limits(payload: &Value) -> Vec<ScopedLimit> {
+    let Some(limits) = payload.get("limits").and_then(Value::as_array) else {
+        return Vec::new();
+    };
 
-    Some(ClaudeScopedLimit {
-        used_percent,
-        resets_at,
-        label,
-    })
+    limits
+        .iter()
+        .filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("weekly_scoped"))
+        .filter_map(|entry| {
+            let used_percent = extract_claude_limit_percent(entry)?;
+            let resets_at =
+                extract_timestamp_field(entry, &["resets_at", "reset_at", "resetsAt", "resetAt"]);
+            let label = entry
+                .get("scope")
+                .and_then(|scope| scope.get("model"))
+                .and_then(|model| model.get("display_name"))
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .map(|name| name.to_string());
+
+            Some(ScopedLimit {
+                used_percent,
+                window_minutes: Some(7 * 24 * 60),
+                resets_at,
+                label,
+            })
+        })
+        .collect()
 }
 
-fn extract_claude_used_percent(value: &Value) -> Option<f64> {
+fn clamp_claude_percent(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0).min(100.0)
+    } else {
+        0.0
+    }
+}
+
+fn extract_claude_limit_percent(entry: &Value) -> Option<f64> {
     if let Some(remaining) = extract_number_field(
-        value,
+        entry,
         &[
             "remaining_percentage",
             "remaining_percent",
@@ -1077,11 +1076,11 @@ fn extract_claude_used_percent(value: &Value) -> Option<f64> {
             "remainingPercent",
         ],
     ) {
-        return Some(100.0 - normalize_claude_percent(remaining));
+        return Some(100.0 - clamp_claude_percent(remaining));
     }
 
     extract_number_field(
-        value,
+        entry,
         &[
             "utilization",
             "used_percentage",
@@ -1091,16 +1090,7 @@ fn extract_claude_used_percent(value: &Value) -> Option<f64> {
             "percent",
         ],
     )
-    .map(normalize_claude_percent)
-}
-
-fn normalize_claude_percent(value: f64) -> f64 {
-    let percent = if value <= 1.0 { value * 100.0 } else { value };
-    if percent.is_finite() {
-        percent.max(0.0).min(100.0)
-    } else {
-        0.0
-    }
+    .map(clamp_claude_percent)
 }
 
 fn extract_claude_credits(payload: &Value) -> Option<String> {

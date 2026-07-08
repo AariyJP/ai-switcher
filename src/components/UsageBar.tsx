@@ -110,10 +110,8 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
     usage.primary_used_percent !== null && usage.primary_used_percent !== undefined;
   const hasSecondary =
     usage.secondary_used_percent !== null && usage.secondary_used_percent !== undefined;
-  const hasScoped =
-    usage.scoped_used_percent !== null &&
-    usage.scoped_used_percent !== undefined &&
-    !!usage.scoped_label;
+  const scopedLimits = (usage.scoped_limits ?? []).filter((limit) => !!limit.label);
+  const hasScoped = scopedLimits.length > 0;
 
   if (!hasPrimary && !hasSecondary && !hasScoped) {
     return (
@@ -139,15 +137,16 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
           resetsAt={usage.secondary_resets_at}
         />
       )}
-      {hasScoped && (
+      {scopedLimits.map((limit, index) => (
         <RateLimitBar
-          label={`Weekly Limit · ${usage.scoped_label}`}
-          usedPercent={usage.scoped_used_percent!}
-          windowMinutes={usage.scoped_window_minutes}
-          resetsAt={usage.scoped_resets_at}
+          key={limit.label ?? index}
+          label={`Weekly Limit · ${limit.label}`}
+          usedPercent={limit.used_percent}
+          windowMinutes={limit.window_minutes}
+          resetsAt={limit.resets_at}
           slim
         />
-      )}
+      ))}
       {usage.credits_balance && (
         <div className="text-muted-foreground text-xs">Credits: {usage.credits_balance}</div>
       )}
