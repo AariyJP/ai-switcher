@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::types::{AuthData, StoredAccount};
@@ -40,12 +41,8 @@ pub fn switch_to_cursor_account(account: &StoredAccount) -> Result<()> {
     let conn = open_cursor_state_db()?;
     write_state_value(&conn, CURSOR_ACCESS_TOKEN_KEY, access_token)?;
     write_state_value(&conn, CURSOR_REFRESH_TOKEN_KEY, refresh_token)?;
-    if let Some(email) = account.email.as_deref() {
-        write_state_value(&conn, CURSOR_EMAIL_KEY, email)?;
-    }
-    if let Some(plan_type) = account.plan_type.as_deref() {
-        write_state_value(&conn, CURSOR_PLAN_KEY, plan_type)?;
-    }
+    write_or_clear_state_value(&conn, CURSOR_EMAIL_KEY, account.email.as_deref())?;
+    write_or_clear_state_value(&conn, CURSOR_PLAN_KEY, account.plan_type.as_deref())?;
     Ok(())
 }
 
@@ -53,17 +50,26 @@ pub fn logout_cursor() -> Result<()> {
     let conn = open_cursor_state_db()?;
     delete_state_value(&conn, CURSOR_ACCESS_TOKEN_KEY)?;
     delete_state_value(&conn, CURSOR_REFRESH_TOKEN_KEY)?;
+    delete_state_value(&conn, CURSOR_EMAIL_KEY)?;
+    delete_state_value(&conn, CURSOR_PLAN_KEY)?;
     Ok(())
 }
 
 fn read_state_value(conn: &Connection, key: &str) -> Result<Option<String>> {
-    conn.query_row(
-        "SELECT value FROM ItemTable WHERE key = ?1",
-        params![key],
-        |row| row.get::<_, String>(0),
-    )
-    .optional()
-    .context("Failed to read Cursor state value")
+    let value = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, Value>(0),
+        )
+        .optional()
+        .context("Failed to read Cursor state value")?;
+
+    Ok(value.and_then(|value| match value {
+        Value::Text(text) => Some(text),
+        Value::Blob(bytes) => String::from_utf8(bytes).ok(),
+        _ => None,
+    }))
 }
 
 fn write_state_value(conn: &Connection, key: &str, value: &str) -> Result<()> {
@@ -74,6 +80,13 @@ fn write_state_value(conn: &Connection, key: &str, value: &str) -> Result<()> {
     )
     .with_context(|| format!("Failed to update Cursor state key `{key}`"))?;
     Ok(())
+}
+
+fn write_or_clear_state_value(conn: &Connection, key: &str, value: Option<&str>) -> Result<()> {
+    match value {
+        Some(value) => write_state_value(conn, key, value),
+        None => delete_state_value(conn, key),
+    }
 }
 
 fn delete_state_value(conn: &Connection, key: &str) -> Result<()> {
@@ -100,20 +113,18 @@ fn cursor_state_db_path() -> Result<std::path::PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let home = dirs::home_dir().context("Could not find home directory")?;
-        return Ok(home.join(
-            "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
-        ));
+        Ok(home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"))
     }
 
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var_os("APPDATA").context("APPDATA env var not set")?;
-        return Ok(std::path::PathBuf::from(appdata).join("Cursor/User/globalStorage/state.vscdb"));
+        Ok(std::path::PathBuf::from(appdata).join("Cursor/User/globalStorage/state.vscdb"))
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         let home = dirs::home_dir().context("Could not find home directory")?;
-        return Ok(home.join(".config/Cursor/User/globalStorage/state.vscdb"));
+        Ok(home.join(".config/Cursor/User/globalStorage/state.vscdb"))
     }
 }
