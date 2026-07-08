@@ -35,8 +35,6 @@ export interface CursorUsageDetails {
   total_used_percent: number | null;
   auto_composer_used_percent: number | null;
   api_used_percent: number | null;
-  included_api_amount_cents: number | null;
-  billing_cycle_days_remaining: number | null;
 }
 
 export interface UsageInfo {

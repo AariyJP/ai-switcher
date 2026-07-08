@@ -241,9 +241,7 @@ pub async fn fetch_cursor_account_metadata(
     let payload = parse_cursor_response_json(response).await?;
 
     Ok(CursorAccountMetadata {
-        plan_type: extract_cursor_plan_name(&payload).map(|plan_name| {
-            normalize_cursor_plan_type_for_storage(&plan_name)
-        }),
+        plan_type: extract_cursor_plan_name(&payload),
     })
 }
 
@@ -260,8 +258,7 @@ pub fn sync_cursor_account_plan_metadata(
         return Ok(());
     };
 
-    let normalized = normalize_cursor_plan_type_for_storage(plan_name);
-    if account.plan_type.as_deref() == Some(normalized.as_str()) {
+    if account.plan_type.as_deref() == Some(plan_name) {
         return Ok(());
     }
 
@@ -269,7 +266,7 @@ pub fn sync_cursor_account_plan_metadata(
         account_id,
         None,
         None,
-        Some(normalized),
+        Some(plan_name.to_string()),
         None,
     )?;
     Ok(())
@@ -1381,10 +1378,6 @@ fn convert_cursor_payload_to_usage_info(
     let total_used_percent = extract_cursor_plan_usage_field(usage_payload, "totalPercentUsed");
     let auto_composer_used_percent = extract_cursor_plan_usage_field(usage_payload, "autoPercentUsed");
     let api_used_percent = extract_cursor_plan_usage_field(usage_payload, "apiPercentUsed");
-    let included_api_amount_cents = plan_payload
-        .get("planInfo")
-        .and_then(|value| extract_cursor_json_number(value.get("includedAmountCents")))
-        .map(|value| value as i64);
     let resets_at_millis = extract_cursor_epoch_millis(billing_payload, "endDateEpochMillis")
         .or_else(|| extract_cursor_epoch_millis(usage_payload, "billingCycleEnd"));
     let starts_at_millis = extract_cursor_epoch_millis(billing_payload, "startDateEpochMillis")
@@ -1393,12 +1386,7 @@ fn convert_cursor_payload_to_usage_info(
         (Some(start), Some(end)) if end > start => Some((end - start) / 1000 / 60),
         _ => None,
     };
-    let billing_cycle_days_remaining = resets_at_millis.map(|end| {
-        let now_millis = Utc::now().timestamp_millis();
-        ((end - now_millis).max(0) + 86_399_999) / 86_400_000
-    });
-    let plan_name = extract_cursor_plan_name(plan_payload)
-        .or_else(|| account.plan_type.clone());
+    let plan_name = extract_cursor_plan_name(plan_payload).or_else(|| account.plan_type.clone());
 
     UsageInfo {
         account_id: account.id.clone(),
@@ -1420,8 +1408,6 @@ fn convert_cursor_payload_to_usage_info(
             total_used_percent,
             auto_composer_used_percent,
             api_used_percent,
-            included_api_amount_cents,
-            billing_cycle_days_remaining,
         }),
         error: None,
     }
@@ -1433,16 +1419,6 @@ fn extract_cursor_plan_name(plan_payload: &Value) -> Option<String> {
         .and_then(|value| value.get("planName"))
         .and_then(Value::as_str)
         .map(str::to_string)
-}
-
-fn normalize_cursor_plan_type_for_storage(plan_name: &str) -> String {
-    match plan_name.trim().to_ascii_lowercase().as_str() {
-        "pro" => "pro".to_string(),
-        "pro+" | "pro plus" => "pro_plus".to_string(),
-        "ultra" => "ultra".to_string(),
-        "free" | "hobby" => "free".to_string(),
-        other => other.replace('+', " plus").trim().replace(' ', "_"),
-    }
 }
 
 fn extract_rate_limits(
