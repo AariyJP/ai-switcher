@@ -3,7 +3,7 @@
 use crate::api::usage::{
     consume_codex_rate_limit_reset_credit as consume_reset_credit, fetch_chatgpt_account_metadata,
     fetch_claude_desktop_account_metadata, fetch_cursor_account_metadata, get_account_usage,
-    refresh_all_usage, sync_cursor_account_plan_metadata, warmup_account as send_warmup,
+    refresh_all_usage, warmup_account as send_warmup,
 };
 use crate::auth::{get_account, load_accounts, refresh_chatgpt_tokens, update_account_metadata};
 use crate::types::{
@@ -19,15 +19,7 @@ pub async fn get_usage(account_id: String) -> Result<UsageInfo, String> {
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
-    let usage = get_account_usage(&account).await.map_err(|e| e.to_string())?;
-
-    if matches!(&account.auth_data, AuthData::Cursor { .. }) {
-        if let Err(err) = sync_cursor_account_plan_metadata(&account_id, &account, &usage) {
-            println!("[Usage] Failed to sync Cursor plan metadata: {err}");
-        }
-    }
-
-    Ok(usage)
+    get_account_usage(&account).await.map_err(|e| e.to_string())
 }
 
 /// Force-refresh account metadata for a specific account.

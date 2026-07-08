@@ -18,12 +18,10 @@ pub fn import_current_cursor_account(account_name: String) -> Result<StoredAccou
         .filter(|value| !value.trim().is_empty())
         .context("Cursor refresh token was not found. Sign in to Cursor first.")?;
     let email = read_state_value(&conn, CURSOR_EMAIL_KEY)?;
-    let plan_type = read_state_value(&conn, CURSOR_PLAN_KEY)?;
 
     Ok(StoredAccount::new_cursor(
         account_name,
         email,
-        plan_type,
         access_token,
         refresh_token,
     ))
@@ -42,7 +40,7 @@ pub fn switch_to_cursor_account(account: &StoredAccount) -> Result<()> {
     write_state_value(&conn, CURSOR_ACCESS_TOKEN_KEY, access_token)?;
     write_state_value(&conn, CURSOR_REFRESH_TOKEN_KEY, refresh_token)?;
     write_or_clear_state_value(&conn, CURSOR_EMAIL_KEY, account.email.as_deref())?;
-    write_or_clear_state_value(&conn, CURSOR_PLAN_KEY, account.plan_type.as_deref())?;
+    delete_state_value(&conn, CURSOR_PLAN_KEY)?;
     Ok(())
 }
 
