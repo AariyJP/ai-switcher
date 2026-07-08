@@ -492,8 +492,6 @@ pub struct CursorUsageDetails {
     pub total_used_percent: Option<f64>,
     pub auto_composer_used_percent: Option<f64>,
     pub api_used_percent: Option<f64>,
-    pub included_api_amount_cents: Option<i64>,
-    pub billing_cycle_days_remaining: Option<i64>,
 }
 
 /// Usage information for an account

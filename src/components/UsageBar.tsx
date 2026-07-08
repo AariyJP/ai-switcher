@@ -108,8 +108,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
 
   const cursorUsage = usage.cursor_usage;
   if (cursorUsage) {
-    const totalUsedPercent =
-      cursorUsage.total_used_percent ?? usage.primary_used_percent;
+    const totalUsedPercent = cursorUsage.total_used_percent;
     const autoUsedPercent = cursorUsage.auto_composer_used_percent;
     const apiUsedPercent = cursorUsage.api_used_percent;
 
@@ -134,22 +133,10 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
           />
         )}
         {autoUsedPercent != null && (
-          <RateLimitBar
-            label="Auto + Composer"
-            usedPercent={autoUsedPercent}
-            windowMinutes={usage.primary_window_minutes}
-            resetsAt={usage.primary_resets_at}
-            slim
-          />
+          <RateLimitBar label="Auto + Composer" usedPercent={autoUsedPercent} slim />
         )}
         {apiUsedPercent != null && (
-          <RateLimitBar
-            label="API"
-            usedPercent={apiUsedPercent}
-            windowMinutes={usage.primary_window_minutes}
-            resetsAt={usage.primary_resets_at}
-            slim
-          />
+          <RateLimitBar label="API" usedPercent={apiUsedPercent} slim />
         )}
       </div>
     );
