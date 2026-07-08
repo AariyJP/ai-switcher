@@ -224,7 +224,6 @@ impl StoredAccount {
     pub fn new_cursor(
         name: String,
         email: Option<String>,
-        plan_type: Option<String>,
         access_token: String,
         refresh_token: String,
     ) -> Self {
@@ -232,7 +231,7 @@ impl StoredAccount {
             id: Uuid::new_v4().to_string(),
             name,
             email,
-            plan_type,
+            plan_type: None,
             subscription_expires_at: None,
             tool: ToolKind::Cursor,
             auth_mode: AuthMode::Cursor,

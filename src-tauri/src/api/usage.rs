@@ -245,33 +245,6 @@ pub async fn fetch_cursor_account_metadata(
     })
 }
 
-pub fn sync_cursor_account_plan_metadata(
-    account_id: &str,
-    account: &StoredAccount,
-    usage: &UsageInfo,
-) -> Result<()> {
-    if usage.error.is_some() {
-        return Ok(());
-    }
-
-    let Some(plan_name) = usage.plan_type.as_deref() else {
-        return Ok(());
-    };
-
-    if account.plan_type.as_deref() == Some(plan_name) {
-        return Ok(());
-    }
-
-    crate::auth::storage::update_account_metadata(
-        account_id,
-        None,
-        None,
-        Some(plan_name.to_string()),
-        None,
-    )?;
-    Ok(())
-}
-
 pub async fn consume_codex_rate_limit_reset_credit(
     account: &StoredAccount,
 ) -> Result<CodexRateLimitResetConsumeResult> {

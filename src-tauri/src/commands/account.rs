@@ -1,6 +1,7 @@
 //! Account management Tauri commands
 
 use super::process::check_processes;
+use crate::api::usage::fetch_cursor_account_metadata;
 use crate::auth::{
     add_account, create_chatgpt_account_from_refresh_token, import_current_claude_account,
     import_current_claude_desktop_account, import_current_cursor_account, import_from_auth_json,
@@ -182,7 +183,11 @@ pub async fn add_claude_desktop_account_from_current(name: String) -> Result<Acc
 
 #[tauri::command]
 pub async fn add_cursor_account_from_current(name: String) -> Result<AccountInfo, String> {
-    let account = import_current_cursor_account(name).map_err(|e| e.to_string())?;
+    let mut account = import_current_cursor_account(name).map_err(|e| e.to_string())?;
+    match fetch_cursor_account_metadata(&account).await {
+        Ok(metadata) => account.plan_type = metadata.plan_type,
+        Err(err) => println!("[Account] Cursor plan lookup failed on import: {err}"),
+    }
     let stored = add_account(account).map_err(|e| e.to_string())?;
 
     let store = load_accounts().map_err(|e| e.to_string())?;
