@@ -22,13 +22,10 @@ function formatExactResetTime(resetAt: number | null | undefined): string {
   if (!resetAt) return "";
 
   const date = new Date(resetAt * 1000);
-  const month = new Intl.DateTimeFormat(undefined, { month: "long" }).format(date);
-  const day = date.getDate();
+  const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
-  const period = date.getHours() >= 12 ? "PM" : "AM";
-  const hour12 = date.getHours() % 12 || 12;
 
-  return `${month} ${day}, ${hour12}:${minutes} ${period}`;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${hours}:${minutes}`;
 }
 
 function formatWindowDuration(minutes: number | null | undefined): string {

@@ -61,7 +61,7 @@ function formatLastRefresh(date: Date | null): string {
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString("ja-JP");
 }
 
 // Subscription status uses semantic tokens: destructive (expired/<=3d), warning (<=7d), muted (else).
@@ -77,7 +77,7 @@ function getSubscriptionStatus(timestamp: string | null | undefined): {
   }
 
   const expiryDate = new Date(timestamp);
-  const formattedDate = new Intl.DateTimeFormat(undefined, {
+  const formattedDate = new Intl.DateTimeFormat("ja-JP", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -112,12 +112,13 @@ function formatResetCreditExpiry(timestamp: string): string {
   const expiryDate = new Date(timestamp);
   if (Number.isNaN(expiryDate.getTime())) return "Expiry unavailable";
 
-  const exact = new Intl.DateTimeFormat(undefined, {
+  const exact = new Intl.DateTimeFormat("ja-JP", {
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    hour12: false,
   }).format(expiryDate);
   const remainingMs = expiryDate.getTime() - Date.now();
   if (remainingMs <= 0) return `Expired ${exact}`;

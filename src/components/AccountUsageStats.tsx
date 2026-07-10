@@ -87,7 +87,7 @@ function formatDuration(seconds: number | null | undefined): string {
 function formatDateLabel(date: string): string {
   const parsed = new Date(`${date}T12:00:00`);
   if (Number.isNaN(parsed.getTime())) return date;
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(parsed);
+  return new Intl.DateTimeFormat("ja-JP", { month: "short", day: "numeric" }).format(parsed);
 }
 
 function formatGeneratedAt(value: string | null): string {
@@ -98,7 +98,7 @@ function formatGeneratedAt(value: string | null): string {
   if (diff < 60_000) return "just now";
   if (diff < 60 * 60_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 24 * 60 * 60_000) return `${Math.floor(diff / (60 * 60_000))}h ago`;
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+  return new Intl.DateTimeFormat("ja-JP", { month: "short", day: "numeric" }).format(date);
 }
 
 function dayKey(offset: number): string {
