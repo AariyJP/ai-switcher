@@ -325,3 +325,15 @@ pub fn set_masked_account_ids(ids: Vec<String>) -> Result<()> {
     save_accounts(&store)?;
     Ok(())
 }
+
+pub fn get_discord_presence_enabled() -> Result<bool> {
+    let store = load_accounts()?;
+    Ok(store.discord_presence_enabled)
+}
+
+pub fn set_discord_presence_enabled(enabled: bool) -> Result<()> {
+    let mut store = load_accounts()?;
+    store.discord_presence_enabled = enabled;
+    save_accounts(&store)?;
+    Ok(())
+}

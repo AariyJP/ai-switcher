@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Eye,
   EyeOff,
+  Gamepad2,
   LogOut,
   Monitor,
   Moon,
@@ -296,6 +297,31 @@ function App() {
       // Ignore storage errors; tab still works for current session.
     }
   }, [activeTool]);
+
+  const [discordPresenceEnabled, setDiscordPresenceEnabled] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    invokeBackend<boolean>("get_discord_presence_enabled")
+      .then((enabled) => {
+        if (!cancelled) setDiscordPresenceEnabled(enabled);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleDiscordPresence = async () => {
+    const next = !discordPresenceEnabled;
+    setDiscordPresenceEnabled(next);
+    try {
+      await invokeBackend("set_discord_presence_enabled", { enabled: next });
+    } catch {
+      setDiscordPresenceEnabled(!next);
+      toast.error("Failed to update Discord Rich Presence setting");
+    }
+  };
 
   const accountsRef = useRef(accounts);
   const autoWarmupAccountIdsRef = useRef(autoWarmupAccountIds);
@@ -1113,6 +1139,27 @@ function App() {
                   </TooltipContent>
                 </Tooltip>
               )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={discordPresenceEnabled ? "success" : "outline"}
+                    size="icon"
+                    onClick={toggleDiscordPresence}
+                    aria-label={
+                      discordPresenceEnabled
+                        ? "Disable Discord Rich Presence"
+                        : "Enable Discord Rich Presence"
+                    }
+                  >
+                    <Gamepad2 />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {discordPresenceEnabled
+                    ? "Disable Discord Rich Presence"
+                    : "Enable Discord Rich Presence"}
+                </TooltipContent>
+              </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="outline" size="icon" onClick={cycleTheme} aria-label={themeTitle}>

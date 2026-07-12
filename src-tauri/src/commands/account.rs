@@ -630,6 +630,7 @@ async fn build_store_from_slim_payload(
         active_claude_desktop_account_id: None,
         active_cursor_account_id: None,
         masked_account_ids: Vec::new(),
+        discord_presence_enabled: true,
     })
 }
 

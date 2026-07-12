@@ -37,6 +37,12 @@ pub struct AccountsStore {
     /// Set of account IDs that are masked (hidden)
     #[serde(default)]
     pub masked_account_ids: Vec<String>,
+    #[serde(default = "default_discord_presence_enabled")]
+    pub discord_presence_enabled: bool,
+}
+
+fn default_discord_presence_enabled() -> bool {
+    true
 }
 
 impl Default for AccountsStore {
@@ -49,6 +55,7 @@ impl Default for AccountsStore {
             active_claude_desktop_account_id: None,
             active_cursor_account_id: None,
             masked_account_ids: Vec::new(),
+            discord_presence_enabled: true,
         }
     }
 }
