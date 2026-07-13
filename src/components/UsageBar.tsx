@@ -136,7 +136,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
           />
         )}
         {autoUsedPercent != null && (
-          <RateLimitBar label="Auto + Composer" usedPercent={autoUsedPercent} slim />
+          <RateLimitBar label="First-party models" usedPercent={autoUsedPercent} slim />
         )}
         {apiUsedPercent != null && (
           <RateLimitBar label="API" usedPercent={apiUsedPercent} slim />
