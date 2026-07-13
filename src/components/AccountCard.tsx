@@ -265,7 +265,9 @@ export function AccountCard({
     planDisplay !== null &&
     planKey !== "unknown" &&
     !(account.auth_mode === "claude_code" && planKey === "code");
-  const showSubscriptionStatus = usageEnabled && account.auth_mode === "chat_g_p_t";
+  const showSubscriptionStatus =
+    usageEnabled &&
+    (account.auth_mode === "chat_g_p_t" || account.auth_mode === "cursor");
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
   const resetCredits = account.usage?.rate_limit_reset_credits;
   const resetFetchError = account.usage?.rate_limit_reset_error;
