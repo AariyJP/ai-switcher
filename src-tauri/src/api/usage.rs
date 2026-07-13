@@ -4,10 +4,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::{stream, StreamExt};
 use reqwest::{
-    header::{
-        HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, REFERER,
-        USER_AGENT,
-    },
+    header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT},
     StatusCode,
 };
 use serde::{Deserialize, Serialize};
@@ -15,13 +12,14 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use crate::auth::{
-    ensure_chatgpt_tokens_fresh, ensure_claude_tokens_fresh, refresh_chatgpt_tokens,
-    refresh_claude_tokens, sync_active_claude_account_credentials,
+    ensure_chatgpt_tokens_fresh, ensure_claude_tokens_fresh, extract_claude_desktop_token,
+    fetch_claude_desktop_profile_metadata, refresh_chatgpt_tokens, refresh_claude_tokens,
+    sync_active_claude_account_credentials,
 };
 use crate::types::{
-    AuthData, ClaudeCredential, ClaudeDesktopSession, CodexRateLimitResetConsumeResult,
+    AuthData, ClaudeCredential, CodexRateLimitResetConsumeResult,
     CodexRateLimitResetCredits, CodexRateLimitResetOutcome, CreditStatusDetails, RateLimitDetails,
-    RateLimitStatusPayload, RateLimitWindow, StoredAccount, UsageInfo,
+    RateLimitStatusPayload, RateLimitWindow, ScopedLimit, StoredAccount, UsageInfo,
 };
 
 const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
@@ -35,15 +33,28 @@ const CHATGPT_RATE_LIMIT_RESET_CREDITS_CONSUME_API: &str =
 const OPENAI_API: &str = "https://api.openai.com/v1";
 const CODEX_USER_AGENT: &str = "codex-cli/1.0.0";
 const CLAUDE_API: &str = "https://api.anthropic.com/api";
+const CLAUDE_MESSAGES_API: &str = "https://api.anthropic.com/v1/messages";
+const CLAUDE_ANTHROPIC_VERSION: &str = "2023-06-01";
+const CLAUDE_WARMUP_MODEL: &str = "claude-haiku-4-5";
 const CLAUDE_USER_AGENT: &str = "claude-code/2.1.142";
 const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
-const CLAUDE_AI_API: &str = "https://claude.ai/api";
-const CLAUDE_DESKTOP_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
+const CURSOR_API: &str = "https://api2.cursor.sh";
 
 #[derive(Debug, Clone)]
 pub struct ChatGptAccountMetadata {
     pub plan_type: Option<String>,
     pub subscription_expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClaudeDesktopAccountMetadata {
+    pub email: Option<String>,
+    pub plan_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CursorAccountMetadata {
+    pub plan_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,18 +131,21 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
                 secondary_used_percent: None,
                 secondary_window_minutes: None,
                 secondary_resets_at: None,
+                scoped_limits: Vec::new(),
                 has_credits: None,
                 unlimited_credits: None,
                 credits_balance: None,
                 rate_limit_reset_available_count: None,
                 rate_limit_reset_credits: None,
                 rate_limit_reset_error: None,
+                cursor_usage: None,
                 error: Some("Usage info not available for API key accounts".to_string()),
             })
         }
         AuthData::ClaudeCode { .. } => get_usage_with_claude_auth(account).await,
         AuthData::ChatGPT { .. } => get_usage_with_chatgpt_auth(account).await,
         AuthData::ClaudeDesktop { .. } => get_usage_with_claude_desktop_auth(account).await,
+        AuthData::Cursor { .. } => get_usage_with_cursor_auth(account).await,
     }
 }
 
@@ -145,10 +159,9 @@ pub async fn warmup_account(account: &StoredAccount) -> Result<()> {
     match &account.auth_data {
         AuthData::ApiKey { key } => warmup_with_api_key(key).await,
         AuthData::ChatGPT { .. } => warmup_with_chatgpt_auth(account).await,
-        AuthData::ClaudeCode { .. } => anyhow::bail!("Claude Code accounts don't support warm-up"),
-        AuthData::ClaudeDesktop { .. } => {
-            anyhow::bail!("Claude Desktop accounts don't support warm-up")
-        }
+        AuthData::ClaudeCode { .. } => warmup_with_claude_auth(account).await,
+        AuthData::ClaudeDesktop { .. } => warmup_with_claude_desktop_auth(account).await,
+        AuthData::Cursor { .. } => Ok(()),
     }
 }
 
@@ -186,6 +199,49 @@ pub async fn fetch_chatgpt_account_metadata(
             .entitlement
             .as_ref()
             .and_then(|entitlement| entitlement.expires_at),
+    })
+}
+
+pub async fn fetch_claude_desktop_account_metadata(
+    account: &StoredAccount,
+) -> Result<ClaudeDesktopAccountMetadata> {
+    let AuthData::ClaudeDesktop {
+        oauth_token_cache,
+        oauth_token_cache_v2,
+        ..
+    } = &account.auth_data
+    else {
+        anyhow::bail!("Account is not a Claude Desktop account");
+    };
+
+    let metadata =
+        fetch_claude_desktop_profile_metadata(oauth_token_cache, oauth_token_cache_v2.as_deref())
+            .await
+            .context("Failed to fetch Claude Desktop profile")?;
+
+    Ok(ClaudeDesktopAccountMetadata {
+        email: metadata.email,
+        plan_type: metadata.plan_type,
+    })
+}
+
+pub async fn fetch_cursor_account_metadata(
+    account: &StoredAccount,
+) -> Result<CursorAccountMetadata> {
+    let AuthData::Cursor { access_token, .. } = &account.auth_data else {
+        anyhow::bail!("Account is not a Cursor account");
+    };
+
+    let response = send_cursor_request(
+        "aiserver.v1.DashboardService/GetPlanInfo",
+        access_token,
+        json!({}),
+    )
+    .await?;
+    let payload = parse_cursor_response_json(response).await?;
+
+    Ok(CursorAccountMetadata {
+        plan_type: extract_cursor_plan_name(&payload),
     })
 }
 
@@ -273,20 +329,11 @@ async fn get_usage_with_claude_auth(account: &StoredAccount) -> Result<UsageInfo
         let refreshed_account = match refresh_claude_tokens(&retry_source).await {
             Ok(account) => account,
             Err(err) => {
-                return Ok(UsageInfo::error(
-                    retry_source.id.clone(),
-                    format_claude_auth_error(&err.to_string()),
-                ));
+                return Ok(UsageInfo::error(retry_source.id.clone(), err.to_string()));
             }
         };
         let retry_oauth = extract_claude_auth(&refreshed_account)?;
         let retry_response = send_claude_usage_request(&retry_oauth.access_token).await?;
-        if retry_response.status() == StatusCode::UNAUTHORIZED {
-            return Ok(UsageInfo::error(
-                refreshed_account.id.clone(),
-                "Claude login expired. Open Claude Code and sign in again, then import the current Claude account again.".to_string(),
-            ));
-        }
         return parse_claude_usage_response(&refreshed_account, retry_oauth, retry_response).await;
     }
 
@@ -392,27 +439,24 @@ async fn parse_rate_limit_reset_consume_response(
 }
 
 async fn get_usage_with_claude_desktop_auth(account: &StoredAccount) -> Result<UsageInfo> {
-    let AuthData::ClaudeDesktop { session, .. } = &account.auth_data else {
+    let AuthData::ClaudeDesktop {
+        oauth_token_cache,
+        oauth_token_cache_v2,
+        ..
+    } = &account.auth_data
+    else {
         anyhow::bail!("Account is not a Claude Desktop account");
     };
 
-    let org_uuid = session
-        .org_uuid
-        .clone()
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            session
-                .cookies
-                .iter()
-                .find(|cookie| cookie.name == "lastActiveOrg")
-                .map(|cookie| cookie.value.clone())
-                .filter(|value| !value.is_empty())
-        })
+    let access_token = oauth_token_cache_v2
+        .as_deref()
+        .and_then(|cache| extract_claude_desktop_token(cache).ok())
+        .or_else(|| extract_claude_desktop_token(oauth_token_cache).ok())
         .context(
-            "Claude Desktop account is missing its organization id. Re-import the account from Claude Desktop.",
+            "Claude Desktop account is missing its OAuth token. Open Claude Desktop, sign in, then re-import this account.",
         )?;
 
-    let response = send_claude_desktop_usage_request(session, &org_uuid).await?;
+    let response = send_claude_usage_request(&access_token).await?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -429,10 +473,6 @@ async fn get_usage_with_claude_desktop_auth(account: &StoredAccount) -> Result<U
         .text()
         .await
         .context("Failed to read Claude Desktop usage response body")?;
-    println!(
-        "[Usage] Claude Desktop response body: {}",
-        &body_text[..body_text.len().min(200)]
-    );
 
     let payload: Value = serde_json::from_str(&body_text)
         .context("Failed to parse Claude Desktop usage response")?;
@@ -445,64 +485,36 @@ async fn get_usage_with_claude_desktop_auth(account: &StoredAccount) -> Result<U
     Ok(usage)
 }
 
-async fn send_claude_desktop_usage_request(
-    session: &ClaudeDesktopSession,
-    org_uuid: &str,
-) -> Result<reqwest::Response> {
-    let client = reqwest::Client::new();
-    let url = format!("{CLAUDE_AI_API}/organizations/{org_uuid}/usage");
+async fn get_usage_with_cursor_auth(account: &StoredAccount) -> Result<UsageInfo> {
+    let AuthData::Cursor { access_token, .. } = &account.auth_data else {
+        anyhow::bail!("Account is not a Cursor account");
+    };
 
-    let mut headers = HeaderMap::new();
-    headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_static(CLAUDE_DESKTOP_USER_AGENT),
-    );
-    headers.insert(REFERER, HeaderValue::from_static("https://claude.ai/"));
-    headers.insert(
-        HeaderName::from_static("anthropic-client-platform"),
-        HeaderValue::from_static("web_claude_ai"),
-    );
-    headers.insert(
-        HeaderName::from_static("anthropic-client-version"),
-        HeaderValue::from_static("1.0.0"),
-    );
-    if let Some(device_id) = session.device_id.as_deref().filter(|s| !s.is_empty()) {
-        if let Ok(value) = HeaderValue::from_str(device_id) {
-            headers.insert(HeaderName::from_static("anthropic-device-id"), value);
+    let usage_response = send_cursor_request(
+        "aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+        access_token,
+        json!({}),
+    )
+    .await?;
+    let usage_payload = parse_cursor_response_json(usage_response).await?;
+    let plan_response = send_cursor_request(
+        "aiserver.v1.DashboardService/GetPlanInfo",
+        access_token,
+        json!({}),
+    )
+    .await;
+    let plan_payload = match plan_response {
+        Ok(response) => parse_cursor_response_json(response).await.unwrap_or(json!({})),
+        Err(err) => {
+            println!("[Usage] Cursor GetPlanInfo failed: {err}");
+            json!({})
         }
-    }
-    if let Ok(cookie_header) = HeaderValue::from_str(&build_cookie_header(session)) {
-        headers.insert(COOKIE, cookie_header);
-    }
-
-    println!("[Usage] Requesting Claude Desktop usage: {url}");
-
-    client
-        .get(&url)
-        .headers(headers)
-        .send()
-        .await
-        .with_context(|| format!("Failed to send Claude Desktop usage request to {url}"))
-}
-
-fn build_cookie_header(session: &ClaudeDesktopSession) -> String {
-    let mut seen = std::collections::HashSet::new();
-    let mut parts = Vec::new();
-    for cookie in &session.cookies {
-        if cookie.name.is_empty() || cookie.value.is_empty() {
-            continue;
-        }
-        if !seen.insert(cookie.name.as_str()) {
-            continue;
-        }
-        parts.push(format!("{}={}", cookie.name, cookie.value));
-    }
-    if !seen.contains("sessionKey") && !session.session_key.is_empty() {
-        parts.push(format!("sessionKey={}", session.session_key));
-    }
-    parts.join("; ")
+    };
+    Ok(convert_cursor_payload_to_usage_info(
+        account,
+        &usage_payload,
+        &plan_payload,
+    ))
 }
 
 async fn parse_claude_usage_response(
@@ -557,17 +569,7 @@ async fn warmup_with_chatgpt_auth(account: &StoredAccount) -> Result<()> {
         response = send_chatgpt_warmup_request(retry_token, retry_account_id, true).await?;
     }
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        println!("[Warmup] ChatGPT warm-up error response: {body}");
-        anyhow::bail!("ChatGPT warm-up failed with status {status}");
-    }
-
-    let body = response.text().await.unwrap_or_default();
-    log_warmup_response("ChatGPT", &body, true);
-
-    Ok(())
+    finish_warmup("ChatGPT", response, true).await
 }
 
 async fn warmup_with_api_key(api_key: &str) -> Result<()> {
@@ -582,17 +584,94 @@ async fn warmup_with_api_key(api_key: &str) -> Result<()> {
         .await
         .context("Failed to send API key warm-up request")?;
 
-    if !response.status().is_success() {
-        let status = response.status();
+    finish_warmup("API key", response, false).await
+}
+
+async fn warmup_with_claude_auth(account: &StoredAccount) -> Result<()> {
+    let synced_account = sync_active_claude_account_credentials(account)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| account.clone());
+    let fresh_account = match ensure_claude_tokens_fresh(&synced_account).await {
+        Ok(account) => account,
+        Err(err) => {
+            println!(
+                "[Warmup] Claude pre-refresh failed for account {}: {}",
+                synced_account.name, err
+            );
+            synced_account.clone()
+        }
+    };
+    let oauth = extract_claude_auth(&fresh_account)?;
+
+    let response = send_claude_warmup_request(&oauth.access_token).await?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        println!(
+            "[Warmup] Unauthorized for Claude account {}, refreshing token and retrying once",
+            fresh_account.name
+        );
+        let retry_source = sync_active_claude_account_credentials(&fresh_account)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| fresh_account.clone());
+        let refreshed_account = refresh_claude_tokens(&retry_source).await?;
+        let retry_oauth = extract_claude_auth(&refreshed_account)?;
+        let retry_response = send_claude_warmup_request(&retry_oauth.access_token).await?;
+        return finish_warmup("Claude Code", retry_response, false).await;
+    }
+
+    finish_warmup("Claude Code", response, false).await
+}
+
+async fn warmup_with_claude_desktop_auth(account: &StoredAccount) -> Result<()> {
+    let AuthData::ClaudeDesktop {
+        oauth_token_cache,
+        oauth_token_cache_v2,
+        ..
+    } = &account.auth_data
+    else {
+        anyhow::bail!("Account is not a Claude Desktop account");
+    };
+    let access_token = match oauth_token_cache_v2.as_deref() {
+        Some(cache) => extract_claude_desktop_token(cache)?,
+        None => extract_claude_desktop_token(oauth_token_cache)?,
+    };
+
+    let response = send_claude_warmup_request(&access_token).await?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        anyhow::bail!(
+            "Claude Desktop token was rejected. Re-import the account from Claude Desktop."
+        );
+    }
+
+    finish_warmup("Claude Desktop", response, false).await
+}
+
+async fn finish_warmup(source: &str, response: reqwest::Response, is_sse: bool) -> Result<()> {
+    let status = response.status();
+    if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        println!("[Warmup] API key warm-up error response: {body}");
-        anyhow::bail!("API key warm-up failed with status {status}");
+        println!("[Warmup] {source} warm-up error response: {body}");
+        anyhow::bail!("{source} warm-up failed with status {status}");
     }
 
     let body = response.text().await.unwrap_or_default();
-    log_warmup_response("API key", &body, false);
-
+    log_warmup_response(source, &body, is_sse);
     Ok(())
+}
+
+fn build_claude_warmup_payload() -> serde_json::Value {
+    json!({
+        "model": CLAUDE_WARMUP_MODEL,
+        "max_tokens": 1,
+        "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hi"
+            }
+        ]
+    })
 }
 
 fn build_warmup_payload(stream: bool, include_max_output_tokens: bool) -> serde_json::Value {
@@ -660,7 +739,10 @@ fn extract_chatgpt_auth(account: &StoredAccount) -> Result<(&str, Option<&str>)>
             account_id,
             ..
         } => Ok((access_token.as_str(), account_id.as_deref())),
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ApiKey { .. }
+        | AuthData::ClaudeCode { .. }
+        | AuthData::ClaudeDesktop { .. }
+        | AuthData::Cursor { .. } => {
             anyhow::bail!("Account is not using ChatGPT OAuth")
         }
     }
@@ -671,7 +753,10 @@ fn extract_claude_auth(account: &StoredAccount) -> Result<ClaudeOauthCredentials
         AuthData::ClaudeCode { credentials, .. } => {
             find_claude_oauth_credentials(credentials).context("Claude OAuth credentials not found")
         }
-        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ApiKey { .. }
+        | AuthData::ChatGPT { .. }
+        | AuthData::ClaudeDesktop { .. }
+        | AuthData::Cursor { .. } => {
             anyhow::bail!("Account is not using Claude Code OAuth")
         }
     }
@@ -738,21 +823,31 @@ async fn send_chatgpt_rate_limit_reset_consume_request(
         .context("Failed to consume ChatGPT rate limit reset credit")
 }
 
-async fn send_claude_usage_request(access_token: &str) -> Result<reqwest::Response> {
-    let client = reqwest::Client::new();
+fn build_claude_headers(access_token: &str, with_version: bool) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
-    let url = format!("{CLAUDE_API}/oauth/usage");
-
     headers.insert(USER_AGENT, HeaderValue::from_static(CLAUDE_USER_AGENT));
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {access_token}")).context("Invalid access token")?,
     );
+    if with_version {
+        headers.insert(
+            HeaderName::from_static("anthropic-version"),
+            HeaderValue::from_static(CLAUDE_ANTHROPIC_VERSION),
+        );
+    }
     headers.insert(
         HeaderName::from_static("anthropic-beta"),
         HeaderValue::from_static(CLAUDE_OAUTH_BETA),
     );
+    Ok(headers)
+}
+
+async fn send_claude_usage_request(access_token: &str) -> Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    let url = format!("{CLAUDE_API}/oauth/usage");
+    let headers = build_claude_headers(access_token, false)?;
 
     println!("[Usage] Requesting Claude usage: {url}");
 
@@ -762,6 +857,20 @@ async fn send_claude_usage_request(access_token: &str) -> Result<reqwest::Respon
         .send()
         .await
         .with_context(|| format!("Failed to send Claude usage request to {url}"))
+}
+
+async fn send_claude_warmup_request(access_token: &str) -> Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    let headers = build_claude_headers(access_token, true)?;
+    let payload = build_claude_warmup_payload();
+
+    client
+        .post(CLAUDE_MESSAGES_API)
+        .headers(headers)
+        .json(&payload)
+        .send()
+        .await
+        .context("Failed to send Claude warm-up request")
 }
 
 async fn send_chatgpt_get_request(
@@ -907,12 +1016,14 @@ fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPaylo
             .and_then(|w| w.limit_window_seconds)
             .map(|s| (i64::from(s) + 59) / 60),
         secondary_resets_at: secondary.as_ref().and_then(|w| w.reset_at),
+        scoped_limits: Vec::new(),
         has_credits: credits.as_ref().map(|c| c.has_credits),
         unlimited_credits: credits.as_ref().map(|c| c.unlimited),
         credits_balance: credits.and_then(|c| c.balance),
         rate_limit_reset_available_count,
         rate_limit_reset_credits: None,
         rate_limit_reset_error: None,
+        cursor_usage: None,
         error: None,
     }
 }
@@ -925,18 +1036,19 @@ fn convert_claude_payload_to_usage_info(
     let primary = extract_claude_limit(payload, "five_hour");
     let secondary = extract_claude_limit(payload, "seven_day")
         .or_else(|| extract_claude_limit(payload, "seven_day_sonnet"));
+    let scoped_limits = extract_claude_scoped_limits(payload);
     let credits_balance = extract_claude_credits(payload);
-    let extra_usage = payload.get("extra_usage");
+    let usage_credits = payload.get("extra_usage");
     let has_credits = credits_balance
         .as_ref()
         .map(|_| true)
         .or_else(|| {
-            extra_usage
+            usage_credits
                 .and_then(|value| value.get("is_enabled"))
                 .and_then(Value::as_bool)
         })
         .or_else(|| extract_bool_field(payload, &["has_credits", "hasCredits"]));
-    let unlimited_credits = extra_usage
+    let unlimited_credits = usage_credits
         .and_then(|value| value.get("monthly_limit"))
         .map(Value::is_null)
         .or_else(|| extract_bool_field(payload, &["unlimited_credits", "unlimitedCredits"]));
@@ -952,19 +1064,21 @@ fn convert_claude_payload_to_usage_info(
         secondary_used_percent: secondary.as_ref().map(|limit| limit.used_percent),
         secondary_window_minutes: secondary.as_ref().map(|_| 7 * 24 * 60),
         secondary_resets_at: secondary.as_ref().and_then(|limit| limit.resets_at),
+        scoped_limits,
         has_credits,
         unlimited_credits,
         credits_balance,
         rate_limit_reset_available_count: None,
         rate_limit_reset_credits: None,
         rate_limit_reset_error: None,
+        cursor_usage: None,
         error: None,
     }
 }
 
 fn extract_claude_limit(payload: &Value, key: &str) -> Option<ClaudeUsageLimit> {
     let value = payload.get(key)?;
-    let used_percent = extract_claude_used_percent(value)?;
+    let used_percent = extract_claude_limit_percent(value)?;
     let resets_at =
         extract_timestamp_field(value, &["resets_at", "reset_at", "resetsAt", "resetAt"]);
 
@@ -974,9 +1088,47 @@ fn extract_claude_limit(payload: &Value, key: &str) -> Option<ClaudeUsageLimit> 
     })
 }
 
-fn extract_claude_used_percent(value: &Value) -> Option<f64> {
+fn extract_claude_scoped_limits(payload: &Value) -> Vec<ScopedLimit> {
+    let Some(limits) = payload.get("limits").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    limits
+        .iter()
+        .filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("weekly_scoped"))
+        .filter_map(|entry| {
+            let used_percent = extract_claude_limit_percent(entry)?;
+            let resets_at =
+                extract_timestamp_field(entry, &["resets_at", "reset_at", "resetsAt", "resetAt"]);
+            let label = entry
+                .get("scope")
+                .and_then(|scope| scope.get("model"))
+                .and_then(|model| model.get("display_name"))
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .map(|name| name.to_string());
+
+            Some(ScopedLimit {
+                used_percent,
+                window_minutes: Some(7 * 24 * 60),
+                resets_at,
+                label,
+            })
+        })
+        .collect()
+}
+
+fn clamp_claude_percent(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0).min(100.0)
+    } else {
+        0.0
+    }
+}
+
+fn extract_claude_limit_percent(entry: &Value) -> Option<f64> {
     if let Some(remaining) = extract_number_field(
-        value,
+        entry,
         &[
             "remaining_percentage",
             "remaining_percent",
@@ -984,29 +1136,21 @@ fn extract_claude_used_percent(value: &Value) -> Option<f64> {
             "remainingPercent",
         ],
     ) {
-        return Some(100.0 - normalize_claude_percent(remaining));
+        return Some(100.0 - clamp_claude_percent(remaining));
     }
 
     extract_number_field(
-        value,
+        entry,
         &[
             "utilization",
             "used_percentage",
             "used_percent",
             "usedPercentage",
             "usedPercent",
+            "percent",
         ],
     )
-    .map(normalize_claude_percent)
-}
-
-fn normalize_claude_percent(value: f64) -> f64 {
-    let percent = if value <= 1.0 { value * 100.0 } else { value };
-    if percent.is_finite() {
-        percent.max(0.0).min(100.0)
-    } else {
-        0.0
-    }
+    .map(clamp_claude_percent)
 }
 
 fn extract_claude_credits(payload: &Value) -> Option<String> {
@@ -1048,19 +1192,40 @@ fn extract_claude_credits(payload: &Value) -> Option<String> {
 
     payload
         .get("extra_usage")
-        .and_then(extract_claude_extra_usage_credits)
+        .and_then(extract_claude_usage_credits)
 }
 
-fn extract_claude_extra_usage_credits(extra_usage: &Value) -> Option<String> {
-    let used = extract_value_field(extra_usage, &["used_credits", "usedCredits"])
-        .and_then(value_to_display_string)?;
-    let limit = extract_value_field(extra_usage, &["monthly_limit", "monthlyLimit"])
-        .filter(|value| !value.is_null())
-        .and_then(value_to_display_string);
+fn extract_claude_usage_credits(usage_credits: &Value) -> Option<String> {
+    let decimals = usage_credits
+        .get("decimal_places")
+        .and_then(Value::as_u64)? as usize;
+    let currency = usage_credits
+        .get("currency")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty());
 
-    limit
-        .map(|limit| format!("{used} / {limit} spent"))
-        .or_else(|| Some(format!("{used} spent")))
+    let used = extract_value_field(usage_credits, &["used_credits", "usedCredits"])
+        .and_then(|value| format_claude_credit_amount(value, decimals))?;
+    let limit = extract_value_field(usage_credits, &["monthly_limit", "monthlyLimit"])
+        .filter(|value| !value.is_null())
+        .and_then(|value| format_claude_credit_amount(value, decimals));
+
+    let amounts = match limit {
+        Some(limit) => format!("{used} / {limit}"),
+        None => used,
+    };
+
+    Some(match currency {
+        Some(currency) => format!("{amounts} {currency} spent"),
+        None => format!("{amounts} spent"),
+    })
+}
+
+fn format_claude_credit_amount(value: &Value, decimals: usize) -> Option<String> {
+    let divisor = 10f64.powi(decimals as i32);
+    value
+        .as_f64()
+        .map(|minor| format!("{:.*}", decimals, minor / divisor))
 }
 
 fn extract_value_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
@@ -1119,16 +1284,103 @@ fn normalize_claude_timestamp(timestamp: f64) -> i64 {
     seconds.round() as i64
 }
 
-fn format_claude_auth_error(error: &str) -> String {
-    if error.contains("invalid_grant") {
-        return "Claude refresh token is no longer valid. Open Claude Code and sign in again, then import the current Claude account again.".to_string();
-    }
+async fn send_cursor_request(
+    path: &str,
+    access_token: &str,
+    body: serde_json::Value,
+) -> Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    client
+        .post(format!("{CURSOR_API}/{path}"))
+        .header(USER_AGENT, HeaderValue::from_static("Cursor/3.10.20"))
+        .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+        .header(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {access_token}")).context("Invalid Cursor access token")?,
+        )
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| format!("Failed to send Cursor request to {path}"))
+}
 
-    if error.contains("Unauthorized") || error.contains("401") {
-        return "Claude login expired. Open Claude Code and sign in again, then import the current Claude account again.".to_string();
+async fn parse_cursor_response_json(response: reqwest::Response) -> Result<Value> {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        anyhow::bail!("Cursor API error: {status} - {body}");
     }
+    if body.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_str(&body).context("Failed to parse Cursor API response")
+}
 
-    error.to_string()
+fn extract_cursor_json_number(value: Option<&Value>) -> Option<f64> {
+    match value? {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn extract_cursor_epoch_millis(payload: &Value, key: &str) -> Option<i64> {
+    extract_cursor_json_number(payload.get(key)).map(|value| value as i64)
+}
+
+fn extract_cursor_plan_usage_field(payload: &Value, key: &str) -> Option<f64> {
+    payload
+        .get("planUsage")
+        .and_then(|value| extract_cursor_json_number(value.get(key)))
+}
+
+fn convert_cursor_payload_to_usage_info(
+    account: &StoredAccount,
+    usage_payload: &Value,
+    plan_payload: &Value,
+) -> UsageInfo {
+    let total_used_percent = extract_cursor_plan_usage_field(usage_payload, "totalPercentUsed");
+    let auto_composer_used_percent = extract_cursor_plan_usage_field(usage_payload, "autoPercentUsed");
+    let api_used_percent = extract_cursor_plan_usage_field(usage_payload, "apiPercentUsed");
+    let resets_at_millis = extract_cursor_epoch_millis(usage_payload, "billingCycleEnd");
+    let starts_at_millis = extract_cursor_epoch_millis(usage_payload, "billingCycleStart");
+    let primary_window_minutes = match (starts_at_millis, resets_at_millis) {
+        (Some(start), Some(end)) if end > start => Some((end - start) / 1000 / 60),
+        _ => None,
+    };
+    let plan_name = extract_cursor_plan_name(plan_payload).or_else(|| account.plan_type.clone());
+
+    UsageInfo {
+        account_id: account.id.clone(),
+        plan_type: plan_name,
+        primary_used_percent: total_used_percent,
+        primary_window_minutes,
+        primary_resets_at: resets_at_millis.map(|value| value / 1000),
+        secondary_used_percent: auto_composer_used_percent,
+        secondary_window_minutes: None,
+        secondary_resets_at: None,
+        scoped_limits: Vec::new(),
+        has_credits: None,
+        unlimited_credits: None,
+        credits_balance: None,
+        rate_limit_reset_available_count: None,
+        rate_limit_reset_credits: None,
+        rate_limit_reset_error: None,
+        cursor_usage: Some(crate::types::CursorUsageDetails {
+            total_used_percent,
+            auto_composer_used_percent,
+            api_used_percent,
+        }),
+        error: None,
+    }
+}
+
+fn extract_cursor_plan_name(plan_payload: &Value) -> Option<String> {
+    plan_payload
+        .get("planInfo")
+        .and_then(|value| value.get("planName"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn extract_rate_limits(

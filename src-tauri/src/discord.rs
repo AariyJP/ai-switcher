@@ -1,4 +1,5 @@
 use std::{
+    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -203,18 +204,53 @@ const PONDERING_WORDS: &[&str] = &[
     "Zigzagging",
 ];
 
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+static PRESENCE_ENABLED: AtomicBool = AtomicBool::new(true);
+
+pub fn set_presence_enabled(enabled: bool) {
+    PRESENCE_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+fn presence_enabled() -> bool {
+    PRESENCE_ENABLED.load(Ordering::SeqCst)
+}
+
+fn wait_while(condition: impl Fn() -> bool, max: Duration) {
+    for _ in 0..max.as_secs() {
+        if !condition() {
+            return;
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
 pub fn start_discord_presence() {
     let start_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
+    set_presence_enabled(
+        crate::auth::storage::get_discord_presence_enabled().unwrap_or(true),
+    );
+
     thread::spawn(move || loop {
+        if !presence_enabled() {
+            thread::sleep(POLL_INTERVAL);
+            continue;
+        }
+
         let mut client = DiscordIpcClient::new(DISCORD_CLIENT_ID);
 
         if client.connect().is_ok() && set_activity(&mut client, start_time).is_ok() {
-            loop {
-                thread::sleep(RECONNECT_INTERVAL);
+            'connected: loop {
+                wait_while(presence_enabled, RECONNECT_INTERVAL);
+
+                if !presence_enabled() {
+                    let _ = client.close();
+                    break 'connected;
+                }
 
                 if set_activity(&mut client, start_time).is_err() {
                     break;
@@ -222,7 +258,7 @@ pub fn start_discord_presence() {
             }
         }
 
-        thread::sleep(RECONNECT_INTERVAL);
+        wait_while(presence_enabled, RECONNECT_INTERVAL);
     });
 }
 

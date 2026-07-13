@@ -1,10 +1,15 @@
 // Types matching the Rust backend
 
-export type ToolKind = "codex" | "claude";
+export type ToolKind = "codex" | "claude" | "cursor";
 
-export type AuthMode = "api_key" | "chat_g_p_t" | "claude_code" | "claude_desktop";
+export type AuthMode =
+  | "api_key"
+  | "chat_g_p_t"
+  | "claude_code"
+  | "claude_desktop"
+  | "cursor";
 
-export type ActiveTool = "codex" | "claude_code" | "claude_desktop";
+export type ActiveTool = "codex" | "claude_code" | "claude_desktop" | "cursor";
 
 export interface AccountInfo {
   id: string;
@@ -19,6 +24,19 @@ export interface AccountInfo {
   last_used_at: string | null;
 }
 
+export interface ScopedLimit {
+  used_percent: number;
+  window_minutes: number | null;
+  resets_at: number | null;
+  label: string | null;
+}
+
+export interface CursorUsageDetails {
+  total_used_percent: number | null;
+  auto_composer_used_percent: number | null;
+  api_used_percent: number | null;
+}
+
 export interface UsageInfo {
   account_id: string;
   plan_type: string | null;
@@ -28,12 +46,14 @@ export interface UsageInfo {
   secondary_used_percent: number | null;
   secondary_window_minutes: number | null;
   secondary_resets_at: number | null;
+  scoped_limits: ScopedLimit[];
   has_credits: boolean | null;
   unlimited_credits: boolean | null;
   credits_balance: string | null;
   rate_limit_reset_available_count: number | null;
   rate_limit_reset_credits: CodexRateLimitResetCredits | null;
   rate_limit_reset_error: string | null;
+  cursor_usage?: CursorUsageDetails | null;
   error: string | null;
 }
 
@@ -62,6 +82,70 @@ export type CodexRateLimitResetOutcome =
 
 export interface CodexRateLimitResetConsumeResult {
   outcome: CodexRateLimitResetOutcome;
+}
+
+export interface AccountUsageSummary {
+  lifetime_tokens: number | null;
+  peak_daily_tokens: number | null;
+  longest_task_seconds: number | null;
+  current_streak_days: number | null;
+  longest_streak_days: number | null;
+}
+
+export interface AccountUsageActivity {
+  fast_mode_percent: number | null;
+  reasoning_effort: string | null;
+  reasoning_effort_percent: number | null;
+  skills_explored: number | null;
+  total_skills_used: number | null;
+  total_threads: number | null;
+}
+
+export interface AccountDailyUsage {
+  date: string;
+  tokens: number;
+}
+
+export interface AccountTopInvocation {
+  kind: string;
+  display_name: string;
+  usage_count: number;
+  plugin_id: string | null;
+  plugin_name: string | null;
+  skill_id: string | null;
+  skill_name: string | null;
+}
+
+export interface AccountResetCredit {
+  id: string;
+  reset_type: string;
+  status: string;
+  granted_at: string | null;
+  expires_at: string | null;
+  redeem_started_at: string | null;
+  redeemed_at: string | null;
+  title: string | null;
+  description: string | null;
+}
+
+export interface AccountResetCredits {
+  available_count: number;
+  next_expires_at: string | null;
+  credits: AccountResetCredit[];
+}
+
+export interface AccountUsageStats {
+  account_id: string;
+  available: boolean;
+  source: string;
+  generated_at: string | null;
+  stats_as_of: string | null;
+  summary: AccountUsageSummary;
+  activity: AccountUsageActivity;
+  daily: AccountDailyUsage[];
+  top_invocations: AccountTopInvocation[];
+  reset_credits: AccountResetCredits | null;
+  error: string | null;
 }
 
 export interface OAuthLoginInfo {

@@ -77,7 +77,7 @@ fn create_auth_json(account: &StoredAccount) -> Result<AuthDotJson> {
             }),
             last_refresh: Some(Utc::now()),
         }),
-        AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } | AuthData::Cursor { .. } => {
             anyhow::bail!("Account is not a Codex account")
         }
     }

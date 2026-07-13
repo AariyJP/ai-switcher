@@ -1,9 +1,13 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::auth::claude_oauth::{
+    fetch_profile, normalize_subscription_type, profile_account_email, profile_organization_type,
+};
 use crate::types::{AuthData, ClaudeDesktopCookie, ClaudeDesktopSession, StoredAccount};
 
 const OAUTH_TOKEN_CACHE_KEY: &str = "oauth:tokenCache";
+const OAUTH_TOKEN_CACHE_V2_KEY: &str = "oauth:tokenCacheV2";
 const V10_PREFIX: &[u8; 3] = b"v10";
 #[cfg(windows)]
 const DPAPI_PREFIX: &[u8; 5] = b"DPAPI";
@@ -14,17 +18,58 @@ const AES_GCM_TAG_LEN: usize = 16;
 #[cfg(windows)]
 const AES_256_KEY_LEN: usize = 32;
 
-pub fn import_current_claude_desktop_account(account_name: String) -> Result<StoredAccount> {
-    let plaintext = read_current_oauth_token_cache()?;
-    let (email, plan_type) = parse_metadata(&plaintext);
+pub async fn import_current_claude_desktop_account(account_name: String) -> Result<StoredAccount> {
+    let config = read_config_json()?;
+    let plaintext = decrypt_cache_field(&config, OAUTH_TOKEN_CACHE_KEY)?.with_context(|| {
+        format!(
+            "oauth:tokenCache not found in {}. Sign in to Claude Desktop first.",
+            config_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        )
+    })?;
+    let (fallback_email, fallback_plan_type) = parse_metadata(&plaintext);
     let session = read_current_claude_desktop_session()?;
+    let oauth_token_cache_v2 = decrypt_cache_field(&config, OAUTH_TOKEN_CACHE_V2_KEY)
+        .ok()
+        .flatten()
+        .filter(|p| !is_empty_token_cache(p));
+    let profile_metadata =
+        fetch_claude_desktop_profile_metadata(&plaintext, oauth_token_cache_v2.as_deref())
+            .await
+            .unwrap_or_default();
+    let email = profile_metadata.email.or(fallback_email);
+    let plan_type = profile_metadata.plan_type.or(fallback_plan_type);
     Ok(StoredAccount::new_claude_desktop(
         account_name,
         email,
         plan_type,
         plaintext,
         session,
+        oauth_token_cache_v2,
     ))
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ClaudeDesktopProfileMetadata {
+    pub email: Option<String>,
+    pub plan_type: Option<String>,
+}
+
+pub(crate) async fn fetch_claude_desktop_profile_metadata(
+    oauth_token_cache: &str,
+    oauth_token_cache_v2: Option<&str>,
+) -> Option<ClaudeDesktopProfileMetadata> {
+    let access_token = match oauth_token_cache_v2 {
+        Some(cache) => extract_claude_desktop_token(cache).ok()?,
+        None => extract_claude_desktop_token(oauth_token_cache).ok()?,
+    };
+    let profile = fetch_profile(&access_token).await?;
+    Some(ClaudeDesktopProfileMetadata {
+        email: profile_account_email(&profile),
+        plan_type: profile_organization_type(&profile)
+            .map(|value| normalize_subscription_type(&value)),
+    })
 }
 
 pub fn read_current_claude_desktop_session() -> Result<ClaudeDesktopSession> {
@@ -54,13 +99,14 @@ pub fn read_current_claude_desktop_session() -> Result<ClaudeDesktopSession> {
 pub fn switch_to_claude_desktop_account(account: &StoredAccount) -> Result<()> {
     let AuthData::ClaudeDesktop {
         oauth_token_cache,
+        oauth_token_cache_v2,
         session,
     } = &account.auth_data
     else {
         anyhow::bail!("Account is not a Claude Desktop account");
     };
     kill_claude_desktop_processes();
-    write_oauth_token_cache(oauth_token_cache)?;
+    write_oauth_token_caches(oauth_token_cache, oauth_token_cache_v2.as_deref())?;
     write_claude_desktop_session(session)?;
     Ok(())
 }
@@ -110,7 +156,9 @@ fn clear_oauth_token_cache() -> Result<()> {
         anyhow::bail!("Claude Desktop config root is not a JSON object");
     };
 
-    if map.remove(OAUTH_TOKEN_CACHE_KEY).is_none() {
+    let removed_v1 = map.remove(OAUTH_TOKEN_CACHE_KEY).is_some();
+    let removed_v2 = map.remove(OAUTH_TOKEN_CACHE_V2_KEY).is_some();
+    if !removed_v1 && !removed_v2 {
         return Ok(());
     }
 
@@ -161,7 +209,44 @@ fn config_path() -> Result<std::path::PathBuf> {
     Ok(claude_desktop_config_dir()?.join("config.json"))
 }
 
-fn read_current_oauth_token_cache() -> Result<String> {
+fn is_empty_token_cache(plaintext: &str) -> bool {
+    let trimmed = plaintext.trim();
+    trimmed.is_empty() || trimmed == "{}"
+}
+
+pub(crate) fn extract_claude_desktop_token(cache_plaintext: &str) -> Result<String> {
+    let value: Value = serde_json::from_str(cache_plaintext)
+        .context("Failed to parse Claude Desktop token cache")?;
+    let obj = value
+        .as_object()
+        .context("Claude Desktop token cache is not a JSON object")?;
+
+    let mut fallback: Option<&Value> = None;
+    let mut preferred: Option<&Value> = None;
+    for (key, entry) in obj {
+        if entry.get("token").and_then(Value::as_str).is_none() {
+            continue;
+        }
+        if key.contains("api.anthropic.com") && key.contains("user:inference") {
+            preferred = Some(entry);
+            break;
+        }
+        if fallback.is_none() {
+            fallback = Some(entry);
+        }
+    }
+    let entry = preferred.or(fallback).context(
+        "Claude Desktop token cache does not contain an OAuth access token. Re-import the account from Claude Desktop.",
+    )?;
+
+    Ok(entry
+        .get("token")
+        .and_then(Value::as_str)
+        .context("Claude Desktop token entry is missing its access token")?
+        .to_string())
+}
+
+fn read_config_json() -> Result<Value> {
     let path = config_path()?;
     if !path.exists() {
         anyhow::bail!(
@@ -171,49 +256,61 @@ fn read_current_oauth_token_cache() -> Result<String> {
     }
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read Claude Desktop config: {}", path.display()))?;
-    let value: Value = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse Claude Desktop config: {}", path.display()))?;
-    let encrypted_b64 = value
-        .get(OAUTH_TOKEN_CACHE_KEY)
-        .and_then(|v| v.as_str())
-        .with_context(|| {
-            format!(
-                "oauth:tokenCache not found in {}. Sign in to Claude Desktop first.",
-                path.display()
-            )
-        })?;
-
-    decrypt_token_cache(encrypted_b64)
+    serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse Claude Desktop config: {}", path.display()))
 }
 
-fn write_oauth_token_cache(plaintext: &str) -> Result<()> {
+fn write_config_json(value: &Value) -> Result<()> {
     let path = config_path()?;
-    if !path.exists() {
-        anyhow::bail!(
-            "Claude Desktop config not found: {}. Launch Claude Desktop at least once first.",
-            path.display()
-        );
-    }
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read Claude Desktop config: {}", path.display()))?;
-    let mut value: Value = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse Claude Desktop config: {}", path.display()))?;
+    let serialized =
+        serde_json::to_string_pretty(value).context("Failed to serialize Claude Desktop config")?;
+    std::fs::write(&path, serialized)
+        .with_context(|| format!("Failed to write Claude Desktop config: {}", path.display()))
+}
 
+fn decrypt_cache_field(config: &Value, key: &str) -> Result<Option<String>> {
+    match config.get(key).and_then(|v| v.as_str()) {
+        Some(encrypted_b64) => Ok(Some(decrypt_token_cache(encrypted_b64)?)),
+        None => Ok(None),
+    }
+}
+
+fn read_current_oauth_token_cache() -> Result<String> {
+    let config = read_config_json()?;
+    decrypt_cache_field(&config, OAUTH_TOKEN_CACHE_KEY)?.with_context(|| {
+        format!(
+            "oauth:tokenCache not found in {}. Sign in to Claude Desktop first.",
+            config_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        )
+    })
+}
+
+fn write_oauth_token_caches(v1_plaintext: &str, v2_plaintext: Option<&str>) -> Result<()> {
+    let mut value = read_config_json()?;
     let Some(map) = value.as_object_mut() else {
         anyhow::bail!("Claude Desktop config root is not a JSON object");
     };
 
-    let encrypted_b64 = encrypt_token_cache(plaintext)?;
     map.insert(
         OAUTH_TOKEN_CACHE_KEY.to_string(),
-        Value::String(encrypted_b64),
+        Value::String(encrypt_token_cache(v1_plaintext)?),
     );
 
-    let serialized = serde_json::to_string_pretty(&value)
-        .context("Failed to serialize Claude Desktop config")?;
-    std::fs::write(&path, serialized)
-        .with_context(|| format!("Failed to write Claude Desktop config: {}", path.display()))?;
-    Ok(())
+    match v2_plaintext.filter(|v2| !is_empty_token_cache(v2)) {
+        Some(v2) => {
+            map.insert(
+                OAUTH_TOKEN_CACHE_V2_KEY.to_string(),
+                Value::String(encrypt_token_cache(v2)?),
+            );
+        }
+        None => {
+            map.remove(OAUTH_TOKEN_CACHE_V2_KEY);
+        }
+    }
+
+    write_config_json(&value)
 }
 
 fn write_claude_desktop_session(session: &ClaudeDesktopSession) -> Result<()> {

@@ -116,7 +116,7 @@ jobs:
           }
           $staging = "src-tauri/target/msix-staging"
           $outputDir = "src-tauri/target/msix"
-          $output = "$outputDir/AI.Switcher_${version}_x64.msix"
+          $output = "$outputDir/AI.Switcher_${versionCore}_x64.msix"
 
           Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $staging, $outputDir | Out-Null
@@ -141,6 +141,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.set_version.outputs.version }}
+          draft: true
           files: src-tauri/target/msix/*.msix
 
   finalize_release:

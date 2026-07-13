@@ -2,11 +2,13 @@
 
 use crate::api::usage::{
     consume_codex_rate_limit_reset_credit as consume_reset_credit, fetch_chatgpt_account_metadata,
-    get_account_usage, refresh_all_usage, warmup_account as send_warmup,
+    fetch_claude_desktop_account_metadata, fetch_cursor_account_metadata, get_account_usage,
+    refresh_all_usage, warmup_account as send_warmup,
 };
 use crate::auth::{get_account, load_accounts, refresh_chatgpt_tokens, update_account_metadata};
 use crate::types::{
-    AccountInfo, AuthData, CodexRateLimitResetConsumeResult, ToolKind, UsageInfo, WarmupSummary,
+    AccountInfo, AuthData, AuthMode, CodexRateLimitResetConsumeResult, ToolKind, UsageInfo,
+    WarmupSummary,
 };
 use futures::{stream, StreamExt};
 
@@ -30,8 +32,34 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
     let updated = match &account.auth_data {
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
-            account
+        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } => account,
+        AuthData::Cursor { .. } => {
+            let live_metadata = fetch_cursor_account_metadata(&account)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            update_account_metadata(
+                &account_id,
+                None,
+                None,
+                live_metadata.plan_type,
+                None,
+            )
+            .map_err(|e| e.to_string())?
+        }
+        AuthData::ClaudeDesktop { .. } => {
+            let live_metadata = fetch_claude_desktop_account_metadata(&account)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            update_account_metadata(
+                &account_id,
+                None,
+                live_metadata.email,
+                live_metadata.plan_type,
+                None,
+            )
+            .map_err(|e| e.to_string())?
         }
         AuthData::ChatGPT { .. } => {
             let refreshed = refresh_chatgpt_tokens(&account)
@@ -53,7 +81,7 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
     };
 
     let store = load_accounts().map_err(|e| e.to_string())?;
-    let active_id = store.active_account_id.as_deref();
+    let active_id = store.active_account_id_for_mode(updated.tool, updated.auth_mode);
     Ok(AccountInfo::from_stored(&updated, active_id))
 }
 
@@ -92,17 +120,23 @@ pub async fn warmup_account(account_id: String) -> Result<(), String> {
 
 /// Send minimal warm-up requests for all accounts
 #[tauri::command]
-pub async fn warmup_all_accounts() -> Result<WarmupSummary, String> {
+pub async fn warmup_all_accounts(
+    tool: Option<ToolKind>,
+    auth_mode: Option<AuthMode>,
+) -> Result<WarmupSummary, String> {
+    let tool = tool.unwrap_or(ToolKind::Codex);
     let store = load_accounts().map_err(|e| e.to_string())?;
-    let codex_accounts: Vec<_> = store
+    let target_accounts: Vec<_> = store
         .accounts
         .into_iter()
-        .filter(|account| account.tool == ToolKind::Codex)
+        .filter(|account| {
+            account.tool == tool && auth_mode.map_or(true, |m| account.auth_mode == m)
+        })
         .collect();
-    let total_accounts = codex_accounts.len();
+    let total_accounts = target_accounts.len();
     let concurrency = total_accounts.min(10).max(1);
 
-    let results: Vec<(String, bool)> = stream::iter(codex_accounts.into_iter())
+    let results: Vec<(String, bool)> = stream::iter(target_accounts.into_iter())
         .map(|account| async move {
             let account_id = account.id.clone();
             let failed = send_warmup(&account).await.is_err();

@@ -1,12 +1,14 @@
 //! Account management Tauri commands
 
 use super::process::check_processes;
+use crate::api::usage::fetch_cursor_account_metadata;
 use crate::auth::{
     add_account, create_chatgpt_account_from_refresh_token, import_current_claude_account,
-    import_current_claude_desktop_account, import_from_auth_json, import_from_auth_json_contents,
-    load_accounts, logout_claude_code, logout_claude_desktop, logout_codex, remove_account,
-    save_accounts, set_active_account, switch_to_account, switch_to_claude_account,
-    switch_to_claude_desktop_account, touch_account,
+    import_current_claude_desktop_account, import_current_cursor_account, import_from_auth_json,
+    import_from_auth_json_contents, load_accounts, logout_claude_code, logout_claude_desktop,
+    logout_codex, logout_cursor, remove_account, save_accounts, set_active_account,
+    switch_to_account, switch_to_claude_account, switch_to_claude_desktop_account,
+    switch_to_cursor_account, touch_account,
 };
 use crate::types::{
     AccountInfo, AccountsStore, AuthData, AuthMode, ImportAccountsSummary, StoredAccount, ToolKind,
@@ -168,11 +170,28 @@ pub async fn add_claude_desktop_account_from_current(name: String) -> Result<Acc
         return Err("Close Claude Desktop before importing this account.".to_string());
     }
 
-    let account = import_current_claude_desktop_account(name).map_err(|e| e.to_string())?;
+    let account = import_current_claude_desktop_account(name)
+        .await
+        .map_err(|e| e.to_string())?;
     let stored = add_account(account).map_err(|e| e.to_string())?;
 
     let store = load_accounts().map_err(|e| e.to_string())?;
     let active_id = store.active_account_id_for_mode(ToolKind::Claude, AuthMode::ClaudeDesktop);
+
+    Ok(AccountInfo::from_stored(&stored, active_id))
+}
+
+#[tauri::command]
+pub async fn add_cursor_account_from_current(name: String) -> Result<AccountInfo, String> {
+    let mut account = import_current_cursor_account(name).map_err(|e| e.to_string())?;
+    match fetch_cursor_account_metadata(&account).await {
+        Ok(metadata) => account.plan_type = metadata.plan_type,
+        Err(err) => println!("[Account] Cursor plan lookup failed on import: {err}"),
+    }
+    let stored = add_account(account).map_err(|e| e.to_string())?;
+
+    let store = load_accounts().map_err(|e| e.to_string())?;
+    let active_id = store.active_account_id_for_mode(ToolKind::Cursor, AuthMode::Cursor);
 
     Ok(AccountInfo::from_stored(&stored, active_id))
 }
@@ -201,6 +220,9 @@ pub async fn switch_account(account_id: String) -> Result<(), String> {
         }
         AuthData::ClaudeDesktop { .. } => {
             switch_to_claude_desktop_account(account).map_err(|e| e.to_string())?;
+        }
+        AuthData::Cursor { .. } => {
+            switch_to_cursor_account(account).map_err(|e| e.to_string())?;
         }
     }
 
@@ -267,6 +289,16 @@ pub async fn claude_code_logout() -> Result<(), String> {
 
     let mut store = load_accounts().map_err(|e| e.to_string())?;
     store.set_active_account_id_for_mode(ToolKind::Claude, AuthMode::ClaudeCode, None);
+    save_accounts(&store).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cursor_logout() -> Result<(), String> {
+    logout_cursor().map_err(|e| e.to_string())?;
+
+    let mut store = load_accounts().map_err(|e| e.to_string())?;
+    store.set_active_account_id_for_mode(ToolKind::Cursor, AuthMode::Cursor, None);
     save_accounts(&store).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -463,7 +495,9 @@ fn encode_slim_payload_from_store(store: &AccountsStore) -> anyhow::Result<Strin
                 api_key: None,
                 refresh_token: Some(refresh_token.clone()),
             },
-            AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => unreachable!(),
+            AuthData::ClaudeCode { .. }
+            | AuthData::ClaudeDesktop { .. }
+            | AuthData::Cursor { .. } => unreachable!(),
         })
         .collect();
 
@@ -594,7 +628,9 @@ async fn build_store_from_slim_payload(
         active_account_id,
         active_claude_account_id: None,
         active_claude_desktop_account_id: None,
+        active_cursor_account_id: None,
         masked_account_ids: Vec::new(),
+        discord_presence_enabled: true,
     })
 }
 
@@ -806,6 +842,16 @@ fn validate_imported_store(store: &AccountsStore) -> anyhow::Result<()> {
         }
     }
 
+    if let Some(active_id) = &store.active_cursor_account_id {
+        if !store
+            .accounts
+            .iter()
+            .any(|a| &a.id == active_id && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor)
+        {
+            anyhow::bail!("Import references a missing active Cursor account: {active_id}");
+        }
+    }
+
     Ok(())
 }
 
@@ -817,6 +863,7 @@ fn merge_accounts_store(
     let imported_active_id = imported.active_account_id;
     let imported_active_claude_id = imported.active_claude_account_id;
     let imported_active_claude_desktop_id = imported.active_claude_desktop_account_id;
+    let imported_active_cursor_id = imported.active_cursor_account_id;
     let total_in_payload = imported.accounts.len();
     let mut imported_count = 0usize;
     let mut existing_ids: HashSet<String> = current.accounts.iter().map(|a| a.id.clone()).collect();
@@ -930,6 +977,35 @@ fn merge_accounts_store(
                 .accounts
                 .iter()
                 .find(|a| a.tool == ToolKind::Claude && a.auth_mode == AuthMode::ClaudeDesktop)
+                .map(|a| a.id.clone());
+        }
+    }
+
+    let current_cursor_active_is_valid = current.active_cursor_account_id.as_ref().is_some_and(|id| {
+        current
+            .accounts
+            .iter()
+            .any(|a| &a.id == id && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor)
+    });
+
+    if !current_cursor_active_is_valid {
+        if let Some(imported_active) = imported_active_cursor_id {
+            if current.accounts.iter().any(|a| {
+                a.id == imported_active && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor
+            }) {
+                current.active_cursor_account_id = Some(imported_active);
+            } else {
+                current.active_cursor_account_id = current
+                    .accounts
+                    .iter()
+                    .find(|a| a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor)
+                    .map(|a| a.id.clone());
+            }
+        } else {
+            current.active_cursor_account_id = current
+                .accounts
+                .iter()
+                .find(|a| a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor)
                 .map(|a| a.id.clone());
         }
     }

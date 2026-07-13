@@ -22,13 +22,10 @@ function formatExactResetTime(resetAt: number | null | undefined): string {
   if (!resetAt) return "";
 
   const date = new Date(resetAt * 1000);
-  const month = new Intl.DateTimeFormat(undefined, { month: "long" }).format(date);
-  const day = date.getDate();
+  const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
-  const period = date.getHours() >= 12 ? "PM" : "AM";
-  const hour12 = date.getHours() % 12 || 12;
 
-  return `${month} ${day}, ${hour12}:${minutes} ${period}`;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${hours}:${minutes}`;
 }
 
 function formatWindowDuration(minutes: number | null | undefined): string {
@@ -39,16 +36,24 @@ function formatWindowDuration(minutes: number | null | undefined): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+function formatLimitLabel(minutes: number | null | undefined): string {
+  if (minutes === 5 * 60) return "5h Limit";
+  if (minutes === 7 * 24 * 60) return "Weekly Limit";
+  return "Usage Limit";
+}
+
 function RateLimitBar({
   label,
   usedPercent,
   windowMinutes,
   resetsAt,
+  slim = false,
 }: {
   label: string;
   usedPercent: number;
   windowMinutes?: number | null;
   resetsAt?: number | null;
+  slim?: boolean;
 }) {
   const remainingPercent = Math.max(0, 100 - usedPercent);
   // Semantic status color: low remaining → destructive → warning → success
@@ -77,7 +82,7 @@ function RateLimitBar({
       </div>
       <Progress
         value={remainingPercent}
-        className="h-1.5"
+        className={slim ? "h-0.5" : "h-1.5"}
         indicatorClassName={cn("transition-all duration-300", indicatorClass)}
       />
     </div>
@@ -104,12 +109,50 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
     );
   }
 
+  const cursorUsage = usage.cursor_usage;
+  if (cursorUsage) {
+    const totalUsedPercent = cursorUsage.total_used_percent;
+    const autoUsedPercent = cursorUsage.auto_composer_used_percent;
+    const apiUsedPercent = cursorUsage.api_used_percent;
+
+    if (
+      totalUsedPercent == null &&
+      autoUsedPercent == null &&
+      apiUsedPercent == null
+    ) {
+      return (
+        <div className="text-muted-foreground py-1 text-xs italic">No usage data</div>
+      );
+    }
+
+    return (
+      <div className="flex flex-col gap-2">
+        {totalUsedPercent != null && (
+          <RateLimitBar
+            label="Total"
+            usedPercent={totalUsedPercent}
+            windowMinutes={usage.primary_window_minutes}
+            resetsAt={usage.primary_resets_at}
+          />
+        )}
+        {autoUsedPercent != null && (
+          <RateLimitBar label="Auto + Composer" usedPercent={autoUsedPercent} slim />
+        )}
+        {apiUsedPercent != null && (
+          <RateLimitBar label="API" usedPercent={apiUsedPercent} slim />
+        )}
+      </div>
+    );
+  }
+
   const hasPrimary =
     usage.primary_used_percent !== null && usage.primary_used_percent !== undefined;
   const hasSecondary =
     usage.secondary_used_percent !== null && usage.secondary_used_percent !== undefined;
+  const scopedLimits = (usage.scoped_limits ?? []).filter((limit) => !!limit.label);
+  const hasScoped = scopedLimits.length > 0;
 
-  if (!hasPrimary && !hasSecondary) {
+  if (!hasPrimary && !hasSecondary && !hasScoped) {
     return (
       <div className="text-muted-foreground py-1 text-xs italic">No rate limit data</div>
     );
@@ -119,7 +162,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
     <div className="flex flex-col gap-2">
       {hasPrimary && (
         <RateLimitBar
-          label="5h Limit"
+          label={formatLimitLabel(usage.primary_window_minutes)}
           usedPercent={usage.primary_used_percent!}
           windowMinutes={usage.primary_window_minutes}
           resetsAt={usage.primary_resets_at}
@@ -127,12 +170,22 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
       )}
       {hasSecondary && (
         <RateLimitBar
-          label="Weekly Limit"
+          label={formatLimitLabel(usage.secondary_window_minutes)}
           usedPercent={usage.secondary_used_percent!}
           windowMinutes={usage.secondary_window_minutes}
           resetsAt={usage.secondary_resets_at}
         />
       )}
+      {scopedLimits.map((limit, index) => (
+        <RateLimitBar
+          key={limit.label ?? index}
+          label={`Weekly Limit · ${limit.label}`}
+          usedPercent={limit.used_percent}
+          windowMinutes={limit.window_minutes}
+          resetsAt={limit.resets_at}
+          slim
+        />
+      ))}
       {usage.credits_balance && (
         <div className="text-muted-foreground text-xs">Credits: {usage.credits_balance}</div>
       )}

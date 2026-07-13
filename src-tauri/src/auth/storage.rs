@@ -255,7 +255,10 @@ pub fn update_account_chatgpt_tokens(
                 *stored_account_id = Some(new_account_id);
             }
         }
-        AuthData::ApiKey { .. } | AuthData::ClaudeCode { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ApiKey { .. }
+        | AuthData::ClaudeCode { .. }
+        | AuthData::ClaudeDesktop { .. }
+        | AuthData::Cursor { .. } => {
             anyhow::bail!("Cannot update OAuth tokens for an API key account");
         }
     }
@@ -296,7 +299,10 @@ pub fn update_account_claude_credentials(
         } => {
             *stored_credentials = credentials;
         }
-        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } | AuthData::ClaudeDesktop { .. } => {
+        AuthData::ApiKey { .. }
+        | AuthData::ChatGPT { .. }
+        | AuthData::ClaudeDesktop { .. }
+        | AuthData::Cursor { .. } => {
             anyhow::bail!("Cannot update Claude credentials for a non-Claude account");
         }
     }
@@ -316,6 +322,18 @@ pub fn get_masked_account_ids() -> Result<Vec<String>> {
 pub fn set_masked_account_ids(ids: Vec<String>) -> Result<()> {
     let mut store = load_accounts()?;
     store.masked_account_ids = ids;
+    save_accounts(&store)?;
+    Ok(())
+}
+
+pub fn get_discord_presence_enabled() -> Result<bool> {
+    let store = load_accounts()?;
+    Ok(store.discord_presence_enabled)
+}
+
+pub fn set_discord_presence_enabled(enabled: bool) -> Result<()> {
+    let mut store = load_accounts()?;
+    store.discord_presence_enabled = enabled;
     save_accounts(&store)?;
     Ok(())
 }

@@ -6,6 +6,7 @@ import {
   EyeOff,
   RefreshCw,
   RotateCcw,
+  TimerReset,
   Trash2,
   Zap,
 } from "lucide-react";
@@ -26,6 +27,7 @@ import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card"
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { AccountUsageStats } from "@/components/AccountUsageStats";
 import { UsageBar } from "@/components/UsageBar";
 
 interface AccountCardProps {
@@ -59,7 +61,7 @@ function formatLastRefresh(date: Date | null): string {
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString("ja-JP");
 }
 
 // Subscription status uses semantic tokens: destructive (expired/<=3d), warning (<=7d), muted (else).
@@ -75,7 +77,7 @@ function getSubscriptionStatus(timestamp: string | null | undefined): {
   }
 
   const expiryDate = new Date(timestamp);
-  const formattedDate = new Intl.DateTimeFormat(undefined, {
+  const formattedDate = new Intl.DateTimeFormat("ja-JP", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -110,12 +112,13 @@ function formatResetCreditExpiry(timestamp: string): string {
   const expiryDate = new Date(timestamp);
   if (Number.isNaN(expiryDate.getTime())) return "Expiry unavailable";
 
-  const exact = new Intl.DateTimeFormat(undefined, {
+  const exact = new Intl.DateTimeFormat("ja-JP", {
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    hour12: false,
   }).format(expiryDate);
   const remainingMs = expiryDate.getTime() - Date.now();
   if (remainingMs <= 0) return `Expired ${exact}`;
@@ -261,7 +264,6 @@ export function AccountCard({
   const showPlanBadge =
     planDisplay !== null &&
     planKey !== "unknown" &&
-    account.auth_mode !== "claude_desktop" &&
     !(account.auth_mode === "claude_code" && planKey === "code");
   const showSubscriptionStatus = usageEnabled && account.auth_mode === "chat_g_p_t";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
@@ -387,39 +389,53 @@ export function AccountCard({
         )}
 
         {showRateLimitReset && (
-          <button
-            type="button"
-            className={cn(
-              "border-border/60 bg-muted/30 w-full rounded-md border p-3 text-left text-xs transition-colors",
-              resetExpiryLabels.length > 0 && "cursor-pointer hover:bg-muted/50"
-            )}
-            aria-expanded={isResetDetailsOpen}
-            disabled={resetExpiryLabels.length === 0}
-            onClick={() => setIsResetDetailsOpen((open) => !open)}
-          >
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="text-foreground shrink-0 font-medium">Usage resets</span>
-              <Badge variant={!resetFetchError && resetAvailableCount > 0 ? "success" : "secondary"}>
-                {resetBadgeLabel}
-              </Badge>
-              <span className="min-w-0 flex-1" />
-              {resetExpiryLabels.length > 0 && (
+          <div className="border-border border-t pt-3">
+            {resetExpiryLabels.length > 0 ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-auto w-full justify-between gap-3 px-1 py-1 text-sm font-semibold"
+                aria-expanded={isResetDetailsOpen}
+                onClick={() => setIsResetDetailsOpen((open) => !open)}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <TimerReset className="text-muted-foreground" />
+                  <span className="truncate">Usage resets</span>
+                  <span className="text-muted-foreground truncate text-[11px] font-normal">
+                    {resetBadgeLabel}
+                  </span>
+                </span>
                 <ChevronDown
                   className={cn(
-                    "text-muted-foreground size-4 shrink-0 transition-transform",
+                    "text-muted-foreground transition-transform",
                     isResetDetailsOpen && "rotate-180"
                   )}
                 />
-              )}
-            </div>
+              </Button>
+            ) : (
+              <div className="flex min-w-0 items-center gap-2 px-1 py-1 text-sm font-semibold">
+                <TimerReset className="text-muted-foreground size-4 shrink-0" />
+                <span className="truncate">Usage resets</span>
+                <span className="text-muted-foreground truncate text-[11px] font-normal">
+                  {resetBadgeLabel}
+                </span>
+              </div>
+            )}
             {isResetDetailsOpen && resetExpiryLabels.length > 0 && (
-              <ol className="text-muted-foreground mt-2 flex list-decimal flex-col gap-1 pl-4">
+              <ol className="text-muted-foreground mt-2 flex list-decimal flex-col gap-1 pl-4 text-xs">
                 {resetExpiryLabels.map((label, index) => (
                   <li key={`${label}-${index}`}>{label}</li>
                 ))}
               </ol>
             )}
-          </button>
+          </div>
+        )}
+
+        {usageEnabled && account.auth_mode === "chat_g_p_t" && (
+          <AccountUsageStats
+            accountId={account.id}
+            enabled={account.auth_mode === "chat_g_p_t"}
+          />
         )}
 
         <div className="flex gap-2">

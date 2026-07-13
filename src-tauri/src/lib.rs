@@ -10,14 +10,16 @@ mod discord;
 
 use commands::{
     add_account_from_file, add_claude_account_from_current,
-    add_claude_desktop_account_from_current, cancel_claude_login, cancel_login, check_processes,
-    claude_code_logout, claude_desktop_logout, codex_logout, complete_claude_login, complete_login,
-    consume_codex_rate_limit_reset_credit, delete_account, export_accounts_full_encrypted_file,
-    export_accounts_slim_text, get_active_account_info, get_masked_account_ids, get_usage,
-    import_accounts_full_encrypted_file, import_accounts_slim_text, list_accounts,
-    refresh_account_metadata, refresh_all_accounts_usage, rename_account, set_masked_account_ids,
-    set_window_theme, start_claude_login, start_login, switch_account, warmup_account,
-    warmup_all_accounts,
+    add_claude_desktop_account_from_current, add_cursor_account_from_current, cancel_claude_login,
+    cancel_login, check_processes, claude_code_logout, claude_desktop_logout, codex_logout,
+    complete_claude_login, complete_login, consume_codex_rate_limit_reset_credit, cursor_logout,
+    delete_account, export_accounts_full_encrypted_file, export_accounts_slim_text,
+    get_account_usage_stats, get_active_account_info, get_discord_presence_enabled,
+    get_masked_account_ids, get_usage, import_accounts_full_encrypted_file,
+    import_accounts_slim_text, kill_codex_processes, list_accounts, open_codex_app,
+    refresh_account_metadata, refresh_all_accounts_usage, rename_account,
+    set_discord_presence_enabled, set_masked_account_ids, set_window_theme, start_claude_login,
+    start_login, switch_account, warmup_account, warmup_all_accounts,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -37,9 +39,11 @@ pub fn run() {
             add_account_from_file,
             add_claude_account_from_current,
             add_claude_desktop_account_from_current,
+            add_cursor_account_from_current,
             claude_desktop_logout,
             codex_logout,
             claude_code_logout,
+            cursor_logout,
             switch_account,
             delete_account,
             rename_account,
@@ -58,6 +62,7 @@ pub fn run() {
             complete_claude_login,
             cancel_claude_login,
             // Usage
+            get_account_usage_stats,
             get_usage,
             refresh_account_metadata,
             refresh_all_accounts_usage,
@@ -66,8 +71,13 @@ pub fn run() {
             warmup_all_accounts,
             // Process detection
             check_processes,
+            kill_codex_processes,
+            open_codex_app,
             // Window
             set_window_theme,
+            // Discord
+            get_discord_presence_enabled,
+            set_discord_presence_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

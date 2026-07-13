@@ -36,12 +36,14 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
       secondary_used_percent: null,
       secondary_window_minutes: null,
       secondary_resets_at: null,
+      scoped_limits: [],
       has_credits: null,
       unlimited_credits: null,
       credits_balance: null,
       rate_limit_reset_available_count: null,
       rate_limit_reset_credits: null,
       rate_limit_reset_error: null,
+      cursor_usage: null,
       error: message,
     }),
     []
@@ -111,7 +113,10 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
           return;
         }
 
-        if (options?.refreshMetadata && tool === "codex") {
+        if (
+          options?.refreshMetadata &&
+          (tool === "codex" || authMode === "claude_desktop" || tool === "cursor")
+        ) {
           await runWithConcurrency(
             list,
             async (account) => {
@@ -185,7 +190,10 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     options?: { refreshMetadata?: boolean }
   ) => {
     try {
-      if (options?.refreshMetadata && tool === "codex") {
+      if (
+        options?.refreshMetadata &&
+        (tool === "codex" || authMode === "claude_desktop" || tool === "cursor")
+      ) {
         try {
           await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
         } catch (err) {
@@ -226,31 +234,24 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
 
   const warmupAccount = useCallback(async (accountId: string) => {
     try {
-      if (tool !== "codex") {
-        return;
-      }
       await invokeBackend("warmup_account", { accountId });
     } catch (err) {
       console.error("Failed to warm up account:", err);
       throw err;
     }
-  }, [tool]);
+  }, []);
 
   const warmupAllAccounts = useCallback(async () => {
     try {
-      if (tool !== "codex") {
-        return {
-          total_accounts: 0,
-          warmed_accounts: 0,
-          failed_account_ids: [],
-        };
-      }
-      return await invokeBackend<WarmupSummary>("warmup_all_accounts");
+      return await invokeBackend<WarmupSummary>("warmup_all_accounts", {
+        tool,
+        authMode,
+      });
     } catch (err) {
       console.error("Failed to warm up all accounts:", err);
       throw err;
     }
-  }, [tool]);
+  }, [tool, authMode]);
 
   const useCodexRateLimitReset = useCallback(
     async (accountId: string) => {
@@ -363,6 +364,19 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
       }
     },
     [loadAccounts, refreshUsage, tool, authMode, toolKey]
+  );
+
+  const addCursorFromCurrent = useCallback(
+    async (name: string) => {
+      if (tool !== "cursor") {
+        throw new Error("Cursor import is only available on the Cursor tab");
+      }
+      await invokeBackend<AccountInfo>("add_cursor_account_from_current", { name });
+      const accountList = await loadAccounts();
+      fetchedToolsRef.current.add(toolKey);
+      await refreshUsage(accountList);
+    },
+    [loadAccounts, refreshUsage, tool, toolKey]
   );
 
   const startOAuthLogin = useCallback(async (accountName: string) => {
@@ -483,6 +497,8 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     const command =
       tool === "codex"
         ? "codex_logout"
+        : tool === "cursor"
+          ? "cursor_logout"
         : authMode === "claude_desktop"
           ? "claude_desktop_logout"
           : "claude_code_logout";
@@ -512,8 +528,12 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     setAccounts([]);
-    loadAccounts().then((accountList) => {
+    void loadAccounts().then((accountList) => {
+      if (cancelled) {
+        return;
+      }
       if (fetchedToolsRef.current.has(toolKey)) {
         return;
       }
@@ -521,8 +541,16 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
         return;
       }
       fetchedToolsRef.current.add(toolKey);
-      refreshUsage(accountList);
+      void refreshUsage(accountList).catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        console.error("Failed to refresh usage on initial load:", err);
+      });
     });
+    return () => {
+      cancelled = true;
+    };
   }, [loadAccounts, refreshUsage, toolKey]);
 
   return {
@@ -541,6 +569,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     importFromFile,
     addClaudeFromCurrent,
     addClaudeDesktopFromCurrent,
+    addCursorFromCurrent,
     exportAccountsSlimText,
     importAccountsSlimText,
     exportAccountsFullEncryptedFile,

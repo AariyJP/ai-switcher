@@ -11,13 +11,16 @@ use tokio::runtime::Runtime;
 
 use crate::commands::{
     add_account_from_auth_json_text, add_account_from_file, add_claude_account_from_current,
-    add_claude_desktop_account_from_current, cancel_claude_login, cancel_login, check_processes,
-    claude_code_logout, claude_desktop_logout, codex_logout, complete_claude_login, complete_login,
-    consume_codex_rate_limit_reset_credit, delete_account, export_accounts_full_encrypted_bytes,
-    export_accounts_slim_text, get_active_account_info, get_masked_account_ids, get_usage,
-    import_accounts_full_encrypted_bytes, import_accounts_slim_text, list_accounts,
-    refresh_account_metadata, refresh_all_accounts_usage, rename_account, set_masked_account_ids,
-    start_claude_login, start_login, switch_account, warmup_account, warmup_all_accounts,
+    add_claude_desktop_account_from_current, add_cursor_account_from_current, cancel_claude_login,
+    cancel_login, check_processes, claude_code_logout, claude_desktop_logout, codex_logout,
+    complete_claude_login, complete_login, consume_codex_rate_limit_reset_credit, cursor_logout,
+    delete_account, export_accounts_full_encrypted_bytes, export_accounts_slim_text,
+    get_account_usage_stats, get_active_account_info, get_discord_presence_enabled,
+    get_masked_account_ids, get_usage, import_accounts_full_encrypted_bytes,
+    import_accounts_slim_text, kill_codex_processes, list_accounts, open_codex_app,
+    refresh_account_metadata, refresh_all_accounts_usage, rename_account,
+    set_discord_presence_enabled, set_masked_account_ids, start_claude_login, start_login,
+    switch_account, warmup_account, warmup_all_accounts,
 };
 use crate::types::{AuthMode, ToolKind};
 
@@ -82,7 +85,7 @@ struct ToolArgs {
 }
 
 #[derive(Debug, Deserialize)]
-struct ClaudeImportArgs {
+struct ImportByNameArgs {
     name: String,
 }
 
@@ -156,16 +159,21 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             to_json(add_account_from_file(args.path, args.name).await?)
         }
         "add_claude_account_from_current" => {
-            let args: ClaudeImportArgs = parse_args(payload)?;
+            let args: ImportByNameArgs = parse_args(payload)?;
             to_json(add_claude_account_from_current(args.name).await?)
         }
         "add_claude_desktop_account_from_current" => {
-            let args: ClaudeImportArgs = parse_args(payload)?;
+            let args: ImportByNameArgs = parse_args(payload)?;
             to_json(add_claude_desktop_account_from_current(args.name).await?)
+        }
+        "add_cursor_account_from_current" => {
+            let args: ImportByNameArgs = parse_args(payload)?;
+            to_json(add_cursor_account_from_current(args.name).await?)
         }
         "claude_desktop_logout" => to_json(claude_desktop_logout().await?),
         "codex_logout" => to_json(codex_logout().await?),
         "claude_code_logout" => to_json(claude_code_logout().await?),
+        "cursor_logout" => to_json(cursor_logout().await?),
         "add_account_from_auth_json_text" => {
             let args: UploadAuthJsonArgs = parse_args(payload)?;
             to_json(add_account_from_auth_json_text(args.name, args.contents).await?)
@@ -173,6 +181,10 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
         "get_usage" => {
             let args: AccountIdArgs = parse_args(payload)?;
             to_json(get_usage(args.account_id).await?)
+        }
+        "get_account_usage_stats" => {
+            let args: AccountIdArgs = parse_args(payload)?;
+            to_json(get_account_usage_stats(args.account_id).await?)
         }
         "refresh_account_metadata" => {
             let args: AccountIdArgs = parse_args(payload)?;
@@ -187,7 +199,10 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             let args: AccountIdArgs = parse_args(payload)?;
             to_json(warmup_account(args.account_id).await?)
         }
-        "warmup_all_accounts" => to_json(warmup_all_accounts().await?),
+        "warmup_all_accounts" => {
+            let args: ToolArgs = parse_args(payload)?;
+            to_json(warmup_all_accounts(args.tool, args.auth_mode).await?)
+        }
         "switch_account" => {
             let args: AccountIdArgs = parse_args(payload)?;
             to_json(switch_account(args.account_id).await?)
@@ -240,6 +255,17 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             }
             let args: CheckProcessesArgs = parse_args(payload)?;
             to_json(check_processes(args.tool).await?)
+        }
+        "kill_codex_processes" => to_json(kill_codex_processes().await?),
+        "open_codex_app" => to_json(open_codex_app().await?),
+        "get_discord_presence_enabled" => to_json(get_discord_presence_enabled().await?),
+        "set_discord_presence_enabled" => {
+            #[derive(Debug, Deserialize)]
+            struct DiscordPresenceArgs {
+                enabled: bool,
+            }
+            let args: DiscordPresenceArgs = parse_args(payload)?;
+            to_json(set_discord_presence_enabled(args.enabled).await?)
         }
         _ => Err(format!("Unsupported web command: {command}")),
     }

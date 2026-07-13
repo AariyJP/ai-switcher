@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Eye,
   EyeOff,
+  Gamepad2,
   LogOut,
   Monitor,
   Moon,
@@ -107,6 +108,7 @@ const ACTIVE_TOOL_TO_BACKEND: Record<
   codex: { tool: "codex" },
   claude_code: { tool: "claude", authMode: "claude_code" },
   claude_desktop: { tool: "claude", authMode: "claude_desktop" },
+  cursor: { tool: "cursor" },
 };
 type SortKey =
   | "deadline_asc"
@@ -196,7 +198,12 @@ function App() {
     if (typeof window === "undefined") return "codex";
     try {
       const saved = window.localStorage.getItem(ACTIVE_TOOL_STORAGE_KEY);
-      if (saved === "codex" || saved === "claude_code" || saved === "claude_desktop") {
+      if (
+        saved === "codex" ||
+        saved === "claude_code" ||
+        saved === "claude_desktop" ||
+        saved === "cursor"
+      ) {
         return saved;
       }
       if (saved === "claude") return "claude_code";
@@ -224,6 +231,7 @@ function App() {
     importFromFile,
     addClaudeFromCurrent,
     addClaudeDesktopFromCurrent,
+    addCursorFromCurrent,
     exportAccountsSlimText,
     importAccountsSlimText,
     startOAuthLogin,
@@ -249,7 +257,7 @@ function App() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [processInfoByTool, setProcessInfoByTool] = useState<
-    Record<ToolKind, ProcessInfo | null>
+    Record<"codex" | "claude", ProcessInfo | null>
   >({ codex: null, claude: null });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExportingSlim, setIsExportingSlim] = useState(false);
@@ -289,6 +297,31 @@ function App() {
       // Ignore storage errors; tab still works for current session.
     }
   }, [activeTool]);
+
+  const [discordPresenceEnabled, setDiscordPresenceEnabled] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    invokeBackend<boolean>("get_discord_presence_enabled")
+      .then((enabled) => {
+        if (!cancelled) setDiscordPresenceEnabled(enabled);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleDiscordPresence = async () => {
+    const next = !discordPresenceEnabled;
+    setDiscordPresenceEnabled(next);
+    try {
+      await invokeBackend("set_discord_presence_enabled", { enabled: next });
+    } catch {
+      setDiscordPresenceEnabled(!next);
+      toast.error("Failed to update Discord Rich Presence setting");
+    }
+  };
 
   const accountsRef = useRef(accounts);
   const autoWarmupAccountIdsRef = useRef(autoWarmupAccountIds);
@@ -457,7 +490,12 @@ function App() {
 
   const handleSwitch = async (accountId: string) => {
     const latest = await checkProcesses();
-    if (latest && !latest[backendTarget.tool].can_switch) {
+    const activeProcessInfo =
+      latest &&
+      (backendTarget.tool === "codex" || backendTarget.tool === "claude"
+        ? latest[backendTarget.tool]
+        : null);
+    if (activeProcessInfo && !activeProcessInfo.can_switch) {
       return;
     }
 
@@ -476,7 +514,12 @@ function App() {
 
   const handleLogout = async () => {
     const latest = await checkProcesses();
-    if (latest && !latest[backendTarget.tool].can_switch) {
+    const activeProcessInfo =
+      latest &&
+      (backendTarget.tool === "codex" || backendTarget.tool === "claude"
+        ? latest[backendTarget.tool]
+        : null);
+    if (activeProcessInfo && !activeProcessInfo.can_switch) {
       return;
     }
 
@@ -866,22 +909,30 @@ function App() {
   const hasRunningCodex = !!codexProcessInfo && codexProcessInfo.count > 0;
   const hasRunningClaude = !!claudeProcessInfo && claudeProcessInfo.count > 0;
   const usageEnabled = true;
-  const warmupEnabled = activeTool === "codex";
+  const warmupEnabled =
+    activeTool === "codex" ||
+    activeTool === "claude_code" ||
+    activeTool === "claude_desktop";
   const hasRunningActiveTool =
-    activeTool === "codex" ? hasRunningCodex : hasRunningClaude;
+    activeTool === "codex"
+      ? hasRunningCodex
+      : activeTool === "claude_code" || activeTool === "claude_desktop"
+        ? hasRunningClaude
+        : false;
   const activeToolLabel =
     activeTool === "codex"
       ? "Codex"
       : activeTool === "claude_code"
         ? "Claude Code"
-        : "Claude Desktop";
+        : activeTool === "claude_desktop"
+          ? "Claude Desktop"
+          : "Cursor";
   const switchDisabledLabel =
     activeTool === "codex" ? "Codex Running" : "Claude Running";
   const switchDisabledTooltip =
     activeTool === "codex"
       ? "Close all Codex processes first"
       : "Close all Claude processes first";
-
   const sortedOtherAccounts = useMemo(() => {
     if (activeTool !== "codex") {
       return [...otherAccounts].sort((a, b) => a.name.localeCompare(b.name));
@@ -1090,6 +1141,27 @@ function App() {
               )}
               <Tooltip>
                 <TooltipTrigger asChild>
+                  <Button
+                    variant={discordPresenceEnabled ? "success" : "outline"}
+                    size="icon"
+                    onClick={toggleDiscordPresence}
+                    aria-label={
+                      discordPresenceEnabled
+                        ? "Disable Discord Rich Presence"
+                        : "Enable Discord Rich Presence"
+                    }
+                  >
+                    <Gamepad2 />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {discordPresenceEnabled
+                    ? "Disable Discord Rich Presence"
+                    : "Enable Discord Rich Presence"}
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
                   <Button variant="outline" size="icon" onClick={cycleTheme} aria-label={themeTitle}>
                     <ThemeIcon />
                   </Button>
@@ -1164,6 +1236,9 @@ function App() {
               <TabsTrigger value="claude_desktop" disabled={isRefreshing}>
                 Claude Desktop
               </TabsTrigger>
+              <TabsTrigger value="cursor" disabled={isRefreshing}>
+                Cursor
+              </TabsTrigger>
             </TabsList>
           </div>
         </Tabs>
@@ -1193,7 +1268,9 @@ function App() {
                   ? "Codex"
                   : activeTool === "claude_code"
                     ? "Claude Code"
-                    : "Claude Desktop"}{" "}
+                    : activeTool === "claude_desktop"
+                      ? "Claude Desktop"
+                      : "Cursor"}{" "}
                 account to get started
               </EmptyDescription>
             </EmptyHeader>
@@ -1405,6 +1482,7 @@ function App() {
         onImportFile={importFromFile}
         onAddClaudeFromCurrent={addClaudeFromCurrent}
         onAddClaudeDesktopFromCurrent={addClaudeDesktopFromCurrent}
+        onAddCursorFromCurrent={addCursorFromCurrent}
         claudeDesktopImportBlocked={activeTool === "claude_desktop" && hasRunningClaude}
         onStartOAuth={startOAuthLogin}
         onCompleteOAuth={completeOAuthLogin}
