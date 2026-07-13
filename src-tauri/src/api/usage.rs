@@ -497,13 +497,6 @@ async fn get_usage_with_cursor_auth(account: &StoredAccount) -> Result<UsageInfo
     )
     .await?;
     let usage_payload = parse_cursor_response_json(usage_response).await?;
-    let billing_cycle_response = send_cursor_request(
-        "aiserver.v1.DashboardService/GetCurrentBillingCycle",
-        access_token,
-        json!({}),
-    )
-    .await?;
-    let billing_payload = parse_cursor_response_json(billing_cycle_response).await?;
     let plan_response = send_cursor_request(
         "aiserver.v1.DashboardService/GetPlanInfo",
         access_token,
@@ -520,7 +513,6 @@ async fn get_usage_with_cursor_auth(account: &StoredAccount) -> Result<UsageInfo
     Ok(convert_cursor_payload_to_usage_info(
         account,
         &usage_payload,
-        &billing_payload,
         &plan_payload,
     ))
 }
@@ -1345,16 +1337,13 @@ fn extract_cursor_plan_usage_field(payload: &Value, key: &str) -> Option<f64> {
 fn convert_cursor_payload_to_usage_info(
     account: &StoredAccount,
     usage_payload: &Value,
-    billing_payload: &Value,
     plan_payload: &Value,
 ) -> UsageInfo {
     let total_used_percent = extract_cursor_plan_usage_field(usage_payload, "totalPercentUsed");
     let auto_composer_used_percent = extract_cursor_plan_usage_field(usage_payload, "autoPercentUsed");
     let api_used_percent = extract_cursor_plan_usage_field(usage_payload, "apiPercentUsed");
-    let resets_at_millis = extract_cursor_epoch_millis(billing_payload, "endDateEpochMillis")
-        .or_else(|| extract_cursor_epoch_millis(usage_payload, "billingCycleEnd"));
-    let starts_at_millis = extract_cursor_epoch_millis(billing_payload, "startDateEpochMillis")
-        .or_else(|| extract_cursor_epoch_millis(usage_payload, "billingCycleStart"));
+    let resets_at_millis = extract_cursor_epoch_millis(usage_payload, "billingCycleEnd");
+    let starts_at_millis = extract_cursor_epoch_millis(usage_payload, "billingCycleStart");
     let primary_window_minutes = match (starts_at_millis, resets_at_millis) {
         (Some(start), Some(end)) if end > start => Some((end - start) / 1000 / 60),
         _ => None,
