@@ -36,6 +36,12 @@ function formatWindowDuration(minutes: number | null | undefined): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+function formatLimitLabel(minutes: number | null | undefined): string {
+  if (minutes === 5 * 60) return "5h Limit";
+  if (minutes === 7 * 24 * 60) return "Weekly Limit";
+  return "Usage Limit";
+}
+
 function RateLimitBar({
   label,
   usedPercent,
@@ -156,7 +162,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
     <div className="flex flex-col gap-2">
       {hasPrimary && (
         <RateLimitBar
-          label="5h Limit"
+          label={formatLimitLabel(usage.primary_window_minutes)}
           usedPercent={usage.primary_used_percent!}
           windowMinutes={usage.primary_window_minutes}
           resetsAt={usage.primary_resets_at}
@@ -164,7 +170,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
       )}
       {hasSecondary && (
         <RateLimitBar
-          label="Weekly Limit"
+          label={formatLimitLabel(usage.secondary_window_minutes)}
           usedPercent={usage.secondary_used_percent!}
           windowMinutes={usage.secondary_window_minutes}
           resetsAt={usage.secondary_resets_at}
