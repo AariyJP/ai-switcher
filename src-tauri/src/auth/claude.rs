@@ -49,7 +49,7 @@ pub fn switch_to_claude_account(account: &StoredAccount) -> Result<()> {
         if let Err(err) = write_claude_oauth_account(oauth_account) {
             println!("[Claude] Failed to update ~/.claude.json oauthAccount: {err}");
         }
-    } else if let Err(err) = ensure_claude_onboarding_flags() {
+    } else if let Err(err) = update_claude_config(|_| {}) {
         println!("[Claude] Failed to update ~/.claude.json onboarding flags: {err}");
     }
 
@@ -73,10 +73,6 @@ pub fn write_claude_oauth_account(oauth_account: &Value) -> Result<()> {
     update_claude_config(|map| {
         map.insert("oauthAccount".to_string(), oauth_account.clone());
     })
-}
-
-pub fn ensure_claude_onboarding_flags() -> Result<()> {
-    update_claude_config(|_| {})
 }
 
 fn update_claude_config<F>(mutator: F) -> Result<()>
@@ -131,11 +127,19 @@ pub fn logout_claude_code() -> Result<()> {
     for (service_name, account_name) in list_claude_keychain_items()? {
         delete_keychain_password(&service_name, &account_name)?;
     }
+    clear_claude_login_state()?;
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
 pub fn logout_claude_code() -> Result<()> {
+    remove_windows_claude_credentials()?;
+    clear_claude_login_state()?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn remove_windows_claude_credentials() -> Result<()> {
     let path = claude_credentials_path()?;
     if !path.exists() {
         return Ok(());
@@ -165,6 +169,36 @@ pub fn logout_claude_code() -> Result<()> {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn logout_claude_code() -> Result<()> {
     anyhow::bail!("Claude Code logout is currently supported on macOS and Windows");
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn clear_claude_login_state() -> Result<()> {
+    let home = dirs::home_dir().context("Could not find home directory")?;
+    let path = home.join(".claude.json");
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read Claude config: {}", path.display()))?;
+    let mut value: Value = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse Claude config: {}", path.display()))?;
+
+    let Some(map) = value.as_object_mut() else {
+        anyhow::bail!("~/.claude.json root is not a JSON object");
+    };
+
+    map.remove("oauthAccount");
+    map.remove("customApiKeyResponses");
+    map.remove("primaryApiKey");
+    map.insert("hasCompletedOnboarding".to_string(), Value::Bool(false));
+
+    let serialized =
+        serde_json::to_string_pretty(&value).context("Failed to serialize Claude config")?;
+    std::fs::write(&path, serialized)
+        .with_context(|| format!("Failed to write Claude config: {}", path.display()))?;
+
+    Ok(())
 }
 
 #[derive(Default)]
