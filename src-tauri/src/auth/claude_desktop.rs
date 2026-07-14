@@ -8,6 +8,7 @@ use crate::types::{AuthData, ClaudeDesktopCookie, ClaudeDesktopSession, StoredAc
 
 const OAUTH_TOKEN_CACHE_KEY: &str = "oauth:tokenCache";
 const OAUTH_TOKEN_CACHE_V2_KEY: &str = "oauth:tokenCacheV2";
+const LAST_KNOWN_ACCOUNT_UUID_KEY: &str = "lastKnownAccountUuid";
 const V10_PREFIX: &[u8; 3] = b"v10";
 #[cfg(windows)]
 const DPAPI_PREFIX: &[u8; 5] = b"DPAPI";
@@ -87,11 +88,19 @@ pub fn read_current_claude_desktop_session() -> Result<ClaudeDesktopSession> {
         .iter()
         .find(|cookie| cookie.name == "anthropic-device-id")
         .map(|cookie| cookie.value.clone());
+    let account_uuid = read_config_json().ok().and_then(|config| {
+        config
+            .get(LAST_KNOWN_ACCOUNT_UUID_KEY)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    });
 
     Ok(ClaudeDesktopSession {
         session_key,
         org_uuid,
         device_id,
+        account_uuid,
         cookies,
     })
 }
@@ -107,6 +116,7 @@ pub fn switch_to_claude_desktop_account(account: &StoredAccount) -> Result<()> {
     };
     kill_claude_desktop_processes();
     write_oauth_token_caches(oauth_token_cache, oauth_token_cache_v2.as_deref())?;
+    write_last_known_account_uuid(session.account_uuid.as_deref())?;
     write_claude_desktop_session(session)?;
     Ok(())
 }
@@ -310,6 +320,24 @@ fn write_oauth_token_caches(v1_plaintext: &str, v2_plaintext: Option<&str>) -> R
         }
     }
 
+    write_config_json(&value)
+}
+
+fn write_last_known_account_uuid(account_uuid: Option<&str>) -> Result<()> {
+    let Some(account_uuid) = account_uuid.filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    let mut value = read_config_json()?;
+    let Some(map) = value.as_object_mut() else {
+        anyhow::bail!("Claude Desktop config root is not a JSON object");
+    };
+    if map.get(LAST_KNOWN_ACCOUNT_UUID_KEY).and_then(Value::as_str) == Some(account_uuid) {
+        return Ok(());
+    }
+    map.insert(
+        LAST_KNOWN_ACCOUNT_UUID_KEY.to_string(),
+        Value::String(account_uuid.to_string()),
+    );
     write_config_json(&value)
 }
 
