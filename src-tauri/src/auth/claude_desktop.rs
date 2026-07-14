@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::auth::claude_oauth::{
-    fetch_profile, normalize_subscription_type, profile_account_email, profile_organization_type,
-};
+use crate::auth::claude_oauth::{fetch_profile, profile_account_email, profile_plan_type};
 use crate::types::{AuthData, ClaudeDesktopCookie, ClaudeDesktopSession, StoredAccount};
 
 const OAUTH_TOKEN_CACHE_KEY: &str = "oauth:tokenCache";
@@ -68,8 +66,7 @@ pub(crate) async fn fetch_claude_desktop_profile_metadata(
     let profile = fetch_profile(&access_token).await?;
     Some(ClaudeDesktopProfileMetadata {
         email: profile_account_email(&profile),
-        plan_type: profile_organization_type(&profile)
-            .map(|value| normalize_subscription_type(&value)),
+        plan_type: profile_plan_type(&profile),
     })
 }
 

@@ -10,7 +10,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
-import type { AccountWithUsage } from "@/types";
+import type { AccountWithUsage, AuthMode } from "@/types";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -138,6 +138,44 @@ function BlurredText({ children, blur }: { children: React.ReactNode; blur: bool
 
 type PlanBadgeVariant = "default" | "secondary" | "outline" | "success" | "warning";
 
+const CODEX_PLAN_LABELS: Record<string, string> = {
+  free: "Free",
+  go: "Go",
+  plus: "Plus",
+  pro: "Pro 20x",
+  prolite: "Pro 5x",
+  team: "Business",
+  self_serve_business_usage_based: "Self Serve Business Usage Based",
+  business: "Business",
+  enterprise_cbp_usage_based: "Enterprise CBP Usage Based",
+  enterprise: "Enterprise",
+  hc: "Enterprise",
+  edu: "Education",
+  education: "Education",
+};
+
+const CLAUDE_PLAN_LABELS: Record<string, string> = {
+  free: "Free",
+  pro: "Pro",
+  max: "Max",
+  team: "Team",
+  enterprise: "Enterprise",
+  default_claude_max_5x: "Max 5x",
+  default_claude_max_20x: "Max 20x",
+};
+
+function formatPlanDisplay(normalizedPlanType: string, authMode: AuthMode): string {
+  const planKey = normalizedPlanType.toLowerCase();
+  if (authMode === "chat_g_p_t") {
+    const mapped = CODEX_PLAN_LABELS[planKey];
+    if (mapped) return mapped;
+  } else if (authMode === "claude_code" || authMode === "claude_desktop") {
+    const mapped = CLAUDE_PLAN_LABELS[planKey];
+    if (mapped) return mapped;
+  }
+  return normalizedPlanType.charAt(0).toUpperCase() + normalizedPlanType.slice(1);
+}
+
 function getPlanBadgeVariant(planKey: string): PlanBadgeVariant {
   switch (planKey) {
     case "pro":
@@ -255,7 +293,7 @@ export function AccountCard({
   const normalizedPlanType = account.plan_type?.trim();
   const planKey = normalizedPlanType?.toLowerCase() || "api_key";
   const planDisplay = normalizedPlanType
-    ? normalizedPlanType.charAt(0).toUpperCase() + normalizedPlanType.slice(1)
+    ? formatPlanDisplay(normalizedPlanType, account.auth_mode)
     : account.auth_mode === "api_key"
       ? "API Key"
       : null;

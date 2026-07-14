@@ -61,6 +61,8 @@ struct ToolPatterns {
     /// Windows command-line marker for bundled CLI under desktop resources, if any
     #[cfg_attr(not(windows), allow(dead_code))]
     windows_bundled_cli_marker: Option<&'static str>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    windows_bundled_cli_exe_lc: Option<&'static str>,
 }
 
 impl ToolKind {
@@ -68,15 +70,16 @@ impl ToolKind {
         match self {
             ToolKind::Codex => ToolPatterns {
                 cli_token: "codex",
-                desktop_macos_marker: ".app/Contents/MacOS/Codex",
-                desktop_macos_process_name: "Codex",
-                desktop_macos_excludes: &["Codex Helper", "CodexBar"],
+                desktop_macos_marker: ".app/Contents/MacOS/ChatGPT",
+                desktop_macos_process_name: "ChatGPT",
+                desktop_macos_excludes: &["ChatGPT Helper", "Codex Helper", "CodexBar"],
                 bg_helper_markers: &["codex app-server"],
                 ide_plugin_markers: &[".antigravity", "openai.chatgpt", ".vscode"],
                 self_marker: "ai-switcher",
-                windows_exe_lc: "codex.exe",
+                windows_exe_lc: "chatgpt.exe",
                 windows_app_server_marker: Some("app-server"),
                 windows_bundled_cli_marker: Some("resources\\codex.exe"),
+                windows_bundled_cli_exe_lc: Some("codex.exe"),
             },
             ToolKind::Claude => ToolPatterns {
                 cli_token: "claude",
@@ -92,6 +95,7 @@ impl ToolKind {
                 windows_exe_lc: "claude.exe",
                 windows_app_server_marker: None,
                 windows_bundled_cli_marker: None,
+                windows_bundled_cli_exe_lc: None,
             },
             ToolKind::Cursor => ToolPatterns {
                 cli_token: "cursor",
@@ -104,6 +108,7 @@ impl ToolKind {
                 windows_exe_lc: "cursor.exe",
                 windows_app_server_marker: None,
                 windows_bundled_cli_marker: None,
+                windows_bundled_cli_exe_lc: None,
             },
         }
     }
@@ -561,6 +566,10 @@ fn find_windows_processes(patterns: ToolPatterns) -> anyhow::Result<(Vec<u32>, u
     // the command line and only count live top-level app instances.
     let exe_name = patterns.windows_exe_lc;
     let process_name = exe_name.trim_end_matches(".exe");
+    let name_filter = match patterns.windows_bundled_cli_exe_lc {
+        Some(cli_exe) => format!("$_.Name -ieq '{exe_name}' -or $_.Name -ieq '{cli_exe}'"),
+        None => format!("$_.Name -ieq '{exe_name}'"),
+    };
     let powershell_script = format!(
         r#"
 $windowTitles = @{{}}
@@ -569,7 +578,7 @@ Get-Process -Name {process_name} -ErrorAction SilentlyContinue | ForEach-Object 
 }}
 
 Get-CimInstance Win32_Process |
-  Where-Object {{ $_.Name -ieq '{exe_name}' }} |
+  Where-Object {{ {name_filter} }} |
   ForEach-Object {{
     [PSCustomObject]@{{
       Name = $_.Name
@@ -745,6 +754,10 @@ fn open_codex_app_blocking() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         if command_succeeds(Command::new("open").args(["-b", "com.openai.codex"])) {
+            return Ok(());
+        }
+
+        if command_succeeds(Command::new("open").args(["-a", "ChatGPT"])) {
             return Ok(());
         }
 
@@ -1068,22 +1081,22 @@ mod tests {
         let patterns = super::ToolKind::Codex.patterns();
 
         assert!(super::is_macos_desktop_process(
-            "/Applications/Codex.app/Contents/MacOS/Codex",
-            Some("Codex"),
+            "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+            Some("ChatGPT"),
             patterns
         ));
         assert!(super::is_macos_desktop_process(
-            "/Users/test/Applications With Spaces/Codex.app/Contents/MacOS/Codex --flag",
-            Some("Codex"),
+            "/Users/test/Applications With Spaces/ChatGPT.app/Contents/MacOS/ChatGPT --flag",
+            Some("ChatGPT"),
             patterns
         ));
         assert!(!super::is_macos_desktop_process(
-            "/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --app-executable /Applications/Codex.app/Contents/MacOS/Codex --type=renderer",
+            "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.115/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --type=renderer --app-executable /Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
             Some("Codex (Renderer)"),
             patterns
         ));
         assert!(!super::is_macos_desktop_process(
-            "/Applications/Codex.app/Contents/Resources/codex app-server",
+            "/Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled",
             Some("codex"),
             patterns
         ));

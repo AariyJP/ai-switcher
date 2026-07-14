@@ -5,6 +5,7 @@ use std::collections::HashSet;
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
+use crate::auth::claude_oauth::resolve_claude_plan_type;
 use crate::types::{AuthData, ClaudeCredential, StoredAccount};
 
 const CLAUDE_KEYCHAIN_SERVICE_PREFIX: &str = "Claude Code-credentials";
@@ -238,11 +239,9 @@ fn read_claude_metadata() -> Result<ClaudeMetadata> {
 fn parse_claude_plan_type(value: &str) -> Option<String> {
     let parsed: Value = serde_json::from_str(value).ok()?;
     let oauth = parsed.get("claudeAiOauth")?;
-    oauth
-        .get("subscriptionType")
-        .or_else(|| oauth.get("rateLimitTier"))
-        .and_then(|value| value.as_str())
-        .map(String::from)
+    let subscription_type = oauth.get("subscriptionType").and_then(|value| value.as_str());
+    let rate_limit_tier = oauth.get("rateLimitTier").and_then(|value| value.as_str());
+    resolve_claude_plan_type(subscription_type, rate_limit_tier)
 }
 
 #[cfg(target_os = "macos")]

@@ -94,6 +94,26 @@ pub(crate) fn normalize_subscription_type(value: &str) -> String {
     value.strip_prefix("claude_").unwrap_or(value).to_string()
 }
 
+pub(crate) fn resolve_claude_plan_type(
+    subscription_type: Option<&str>,
+    rate_limit_tier: Option<&str>,
+) -> Option<String> {
+    let normalized = subscription_type.map(normalize_subscription_type);
+    if normalized.as_deref() == Some("max") {
+        if let Some(tier @ ("default_claude_max_5x" | "default_claude_max_20x")) = rate_limit_tier {
+            return Some(tier.to_string());
+        }
+    }
+    normalized.or_else(|| rate_limit_tier.map(String::from))
+}
+
+pub(crate) fn profile_plan_type(profile: &Value) -> Option<String> {
+    resolve_claude_plan_type(
+        profile_organization_type(profile).as_deref(),
+        profile_organization_rate_limit_tier(profile).as_deref(),
+    )
+}
+
 pub(crate) fn profile_organization_type(profile: &Value) -> Option<String> {
     profile
         .get("organization")?
