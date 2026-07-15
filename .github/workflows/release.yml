@@ -93,56 +93,7 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         with:
           releaseId: ${{ needs.create_draft_release.outputs.release_id }}
-          includeUpdaterJson: true
           args: --target ${{ matrix.target }}
-
-      - name: Build MSIX package
-        if: matrix.name == 'windows-x64'
-        shell: pwsh
-        run: |
-          $version = "${{ needs.set_version.outputs.version }}" -replace '^v', ''
-          $versionCore = ($version -split '[-+]')[0]
-          $versionParts = @($versionCore -split '\.')
-          while ($versionParts.Count -lt 4) {
-            $versionParts += '0'
-          }
-          $msixVersion = ($versionParts[0..3] -join '.')
-          $releaseExe = "src-tauri/target/${{ matrix.target }}/release/ai-switcher.exe"
-          if (-not (Test-Path $releaseExe)) {
-            $releaseExe = "src-tauri/target/release/ai-switcher.exe"
-          }
-          if (-not (Test-Path $releaseExe)) {
-            throw "ai-switcher.exe was not found"
-          }
-          $staging = "src-tauri/target/msix-staging"
-          $outputDir = "src-tauri/target/msix"
-          $output = "$outputDir/AI.Switcher_${versionCore}_x64.msix"
-
-          Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $staging, $outputDir | Out-Null
-          Copy-Item scripts/msix/AppxManifest.xml "$staging/AppxManifest.xml"
-          Copy-Item scripts/msix/Square150x150Logo.png "$staging/Square150x150Logo.png"
-          Copy-Item scripts/msix/Square44x44Logo.png "$staging/Square44x44Logo.png"
-          Copy-Item scripts/msix/StoreLogo.png "$staging/StoreLogo.png"
-          Copy-Item $releaseExe "$staging/ai-switcher.exe"
-          (Get-Content "$staging/AppxManifest.xml" -Raw).Replace('Version="0.0.0.0"', "Version=`"$msixVersion`"") | Set-Content "$staging/AppxManifest.xml" -NoNewline
-
-          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe |
-            Where-Object { $_.FullName -like '*\x64\makeappx.exe' } |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1
-          if (-not $makeappx) {
-            throw "makeappx.exe was not found"
-          }
-          & $makeappx.FullName pack /d $staging /p $output /o
-
-      - name: Upload MSIX package
-        if: matrix.name == 'windows-x64'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.set_version.outputs.version }}
-          draft: true
-          files: src-tauri/target/msix/*.msix
 
   finalize_release:
     needs: [set_version, create_draft_release, publish]
