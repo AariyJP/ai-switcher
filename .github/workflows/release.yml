@@ -12,9 +12,6 @@ concurrency:
 permissions:
   contents: write
 
-env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
 jobs:
   set_version:
     runs-on: ubuntu-slim
@@ -22,10 +19,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
       - id: version
-        shell: bash
         run: |
           VERSION="$(git log -1 --format=%s | tr -d '[:space:]')"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -33,33 +27,30 @@ jobs:
   create_draft_release:
     needs: [set_version]
     runs-on: ubuntu-slim
-    outputs:
-      release_id: ${{ steps.create.outputs.id }}
     steps:
-      - id: create
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.set_version.outputs.version }}
           target_commitish: ${{ github.sha }}
           name: AI Switcher ${{ needs.set_version.outputs.version }}
           body: |
-            ${{ needs.set_version.outputs.version }} ${{ github.sha }}
+            AI Switcher ${{ needs.set_version.outputs.version }} ${{ github.sha }}
           draft: true
 
   publish:
     needs: [set_version, create_draft_release]
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
-            name: macos-arm64
+            bundle_dir: dmg
+            file_pattern: "*.dmg"
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            name: windows-x64
+            bundle_dir: nsis
+            file_pattern: "*-setup.exe"
 
     runs-on: ${{ matrix.platform }}
 
@@ -84,68 +75,31 @@ jobs:
           workspaces: src-tauri
           key: ${{ matrix.target }}
 
-      - name: Install frontend dependencies
-        run: pnpm install
+      - run: pnpm install
 
-      - name: Bump version
-        run: pnpm version:bump "${{ needs.set_version.outputs.version }}"
+      - run: pnpm version:bump "${{ needs.set_version.outputs.version }}"
 
       - uses: tauri-apps/tauri-action@v0
         with:
-          releaseId: ${{ needs.create_draft_release.outputs.release_id }}
-          includeUpdaterJson: true
           args: --target ${{ matrix.target }}
 
-      - name: Build MSIX package
-        if: matrix.name == 'windows-x64'
-        shell: pwsh
+      - id: rename_installer
+        shell: bash
         run: |
-          $version = "${{ needs.set_version.outputs.version }}" -replace '^v', ''
-          $versionCore = ($version -split '[-+]')[0]
-          $versionParts = @($versionCore -split '\.')
-          while ($versionParts.Count -lt 4) {
-            $versionParts += '0'
-          }
-          $msixVersion = ($versionParts[0..3] -join '.')
-          $releaseExe = "src-tauri/target/${{ matrix.target }}/release/ai-switcher.exe"
-          if (-not (Test-Path $releaseExe)) {
-            $releaseExe = "src-tauri/target/release/ai-switcher.exe"
-          }
-          if (-not (Test-Path $releaseExe)) {
-            throw "ai-switcher.exe was not found"
-          }
-          $staging = "src-tauri/target/msix-staging"
-          $outputDir = "src-tauri/target/msix"
-          $output = "$outputDir/AI.Switcher_${versionCore}_x64.msix"
+          dir="src-tauri/target/${{ matrix.target }}/release/bundle/${{ matrix.bundle_dir }}"
+          source="$(find "$dir" -maxdepth 1 -type f -name '${{ matrix.file_pattern }}' -print -quit)"
+          target="${source/_${{ needs.set_version.outputs.version }}/}"
+          mv "$source" "$target"
+          echo "file=$target" >> "$GITHUB_OUTPUT"
 
-          Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $staging, $outputDir | Out-Null
-          Copy-Item scripts/msix/AppxManifest.xml "$staging/AppxManifest.xml"
-          Copy-Item scripts/msix/Square150x150Logo.png "$staging/Square150x150Logo.png"
-          Copy-Item scripts/msix/Square44x44Logo.png "$staging/Square44x44Logo.png"
-          Copy-Item scripts/msix/StoreLogo.png "$staging/StoreLogo.png"
-          Copy-Item $releaseExe "$staging/ai-switcher.exe"
-          (Get-Content "$staging/AppxManifest.xml" -Raw).Replace('Version="0.0.0.0"', "Version=`"$msixVersion`"") | Set-Content "$staging/AppxManifest.xml" -NoNewline
-
-          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe |
-            Where-Object { $_.FullName -like '*\x64\makeappx.exe' } |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1
-          if (-not $makeappx) {
-            throw "makeappx.exe was not found"
-          }
-          & $makeappx.FullName pack /d $staging /p $output /o
-
-      - name: Upload MSIX package
-        if: matrix.name == 'windows-x64'
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.set_version.outputs.version }}
           draft: true
-          files: src-tauri/target/msix/*.msix
+          files: ${{ steps.rename_installer.outputs.file }}
 
   finalize_release:
-    needs: [set_version, create_draft_release, publish]
+    needs: [set_version, publish]
     runs-on: ubuntu-slim
     steps:
       - uses: softprops/action-gh-release@v2
