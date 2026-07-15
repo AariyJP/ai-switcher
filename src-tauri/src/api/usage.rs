@@ -36,7 +36,7 @@ const CLAUDE_API: &str = "https://api.anthropic.com/api";
 const CLAUDE_MESSAGES_API: &str = "https://api.anthropic.com/v1/messages";
 const CLAUDE_ANTHROPIC_VERSION: &str = "2023-06-01";
 const CLAUDE_WARMUP_MODEL: &str = "claude-haiku-4-5";
-const CLAUDE_USER_AGENT: &str = "claude-code/2.1.142";
+const CLAUDE_USER_AGENT: &str = "claude-code/2.0.0";
 const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
 const CURSOR_API: &str = "https://api2.cursor.sh";
 
@@ -55,6 +55,7 @@ pub struct ClaudeDesktopAccountMetadata {
 #[derive(Debug, Clone)]
 pub struct CursorAccountMetadata {
     pub plan_type: Option<String>,
+    pub subscription_expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -240,8 +241,27 @@ pub async fn fetch_cursor_account_metadata(
     .await?;
     let payload = parse_cursor_response_json(response).await?;
 
+    let usage_response = send_cursor_request(
+        "aiserver.v1.DashboardService/GetCurrentPeriodUsage",
+        access_token,
+        json!({}),
+    )
+    .await;
+    let subscription_expires_at = match usage_response {
+        Ok(response) => parse_cursor_response_json(response)
+            .await
+            .ok()
+            .and_then(|usage_payload| extract_cursor_epoch_millis(&usage_payload, "billingCycleEnd"))
+            .and_then(DateTime::from_timestamp_millis),
+        Err(err) => {
+            println!("[Usage] Cursor GetCurrentPeriodUsage failed: {err}");
+            None
+        }
+    };
+
     Ok(CursorAccountMetadata {
         plan_type: extract_cursor_plan_name(&payload),
+        subscription_expires_at,
     })
 }
 

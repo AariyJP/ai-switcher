@@ -43,7 +43,7 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
                 None,
                 None,
                 live_metadata.plan_type,
-                None,
+                Some(live_metadata.subscription_expires_at),
             )
             .map_err(|e| e.to_string())?
         }

@@ -316,6 +316,8 @@ pub struct ClaudeDesktopSession {
     pub org_uuid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_uuid: Option<String>,
     pub cookies: Vec<ClaudeDesktopCookie>,
 }
 

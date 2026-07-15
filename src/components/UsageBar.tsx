@@ -37,9 +37,9 @@ function formatWindowDuration(minutes: number | null | undefined): string {
 }
 
 function formatLimitLabel(minutes: number | null | undefined): string {
-  if (minutes === 5 * 60) return "5h Limit";
-  if (minutes === 7 * 24 * 60) return "Weekly Limit";
-  return "Usage Limit";
+  if (minutes === 5 * 60) return "5h limit";
+  if (minutes === 7 * 24 * 60) return "Weekly limit";
+  return "Usage limit";
 }
 
 function RateLimitBar({
@@ -76,7 +76,7 @@ function RateLimitBar({
         </span>
         <span>
           {remainingPercent.toFixed(0)}% left
-          {resetLabel && ` • resets ${resetLabel}`}
+          {resetLabel && ` • Resets ${resetLabel}`}
           {resetLabel && exactResetLabel && ` (${exactResetLabel})`}
         </span>
       </div>
@@ -136,7 +136,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
           />
         )}
         {autoUsedPercent != null && (
-          <RateLimitBar label="Auto + Composer" usedPercent={autoUsedPercent} slim />
+          <RateLimitBar label="First-party models" usedPercent={autoUsedPercent} slim />
         )}
         {apiUsedPercent != null && (
           <RateLimitBar label="API" usedPercent={apiUsedPercent} slim />
@@ -179,7 +179,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
       {scopedLimits.map((limit, index) => (
         <RateLimitBar
           key={limit.label ?? index}
-          label={`Weekly Limit · ${limit.label}`}
+          label={`Weekly limit · ${limit.label}`}
           usedPercent={limit.used_percent}
           windowMinutes={limit.window_minutes}
           resetsAt={limit.resets_at}
