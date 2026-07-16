@@ -50,3 +50,4 @@ security-framework = "3"
 aes = "0.8"
 cbc = { version = "0.1", features = ["std"] }
 sha1 = "0.10"
+plist = "1"

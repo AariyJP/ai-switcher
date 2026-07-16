@@ -4,13 +4,13 @@ use std::process::Command;
 
 use crate::types::ToolKind;
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 use anyhow::Context;
 
 #[cfg(unix)]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-#[cfg(windows)]
+#[cfg(any(unix, windows, test))]
 use std::collections::HashSet;
 
 #[cfg(windows)]
@@ -18,6 +18,21 @@ use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct WindowsCodexProcess {
+    name: String,
+    process_id: u32,
+    parent_process_id: u32,
+    #[serde(default)]
+    command_line: String,
+    #[serde(default)]
+    executable_path: String,
+    #[serde(default)]
+    main_window_title: String,
+}
 
 #[cfg(windows)]
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -68,19 +83,7 @@ struct ToolPatterns {
 impl ToolKind {
     fn patterns(self) -> ToolPatterns {
         match self {
-            ToolKind::Codex => ToolPatterns {
-                cli_token: "codex",
-                desktop_macos_marker: ".app/Contents/MacOS/ChatGPT",
-                desktop_macos_process_name: "ChatGPT",
-                desktop_macos_excludes: &["ChatGPT Helper", "Codex Helper", "CodexBar"],
-                bg_helper_markers: &["codex app-server"],
-                ide_plugin_markers: &[".antigravity", "openai.chatgpt", ".vscode"],
-                self_marker: "ai-switcher",
-                windows_exe_lc: "chatgpt.exe",
-                windows_app_server_marker: Some("app-server"),
-                windows_bundled_cli_marker: Some("resources\\codex.exe"),
-                windows_bundled_cli_exe_lc: Some("codex.exe"),
-            },
+            ToolKind::Codex => unreachable!(),
             ToolKind::Claude => ToolPatterns {
                 cli_token: "claude",
                 desktop_macos_marker: ".app/Contents/MacOS/Claude",
@@ -162,7 +165,7 @@ pub async fn kill_codex_processes() -> Result<KillCodexProcessesResult, String> 
 }
 
 fn kill_codex_processes_blocking() -> Result<KillCodexProcessesResult, String> {
-    let (pids, _) = find_processes(ToolKind::Codex).map_err(|e| e.to_string())?;
+    let (pids, _) = find_codex_processes().map_err(|e| e.to_string())?;
     let targeted_count = pids.len();
     let mut killed_pids = Vec::new();
     let mut failed_pids = Vec::new();
@@ -415,8 +418,110 @@ fn process_exists(pid: u32) -> bool {
     false
 }
 
+fn find_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
+    #[cfg(unix)]
+    {
+        let mut pids = Vec::new();
+        let mut bg_count = 0;
+        let process_names = read_unix_process_names();
+
+        let output = Command::new("ps")
+            .args(["-axo", "pid=,tty=,command="])
+            .output();
+
+        if let Ok(output) = output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+
+                let mut parts = line.split_whitespace();
+                let Some(pid_str) = parts.next() else {
+                    continue;
+                };
+                let Some(tty) = parts.next() else {
+                    continue;
+                };
+                let command = parts.collect::<Vec<_>>().join(" ");
+                if command.is_empty() {
+                    continue;
+                }
+
+                let Ok(pid) = pid_str.parse::<u32>() else {
+                    continue;
+                };
+
+                let lowercase_command = command.to_ascii_lowercase();
+                let is_switcher = lowercase_command.contains("codex-switcher");
+
+                if is_switcher {
+                    continue;
+                }
+
+                let first_token = command.split_whitespace().next().unwrap_or("");
+                let is_codex_cli = first_token == "codex" || first_token.ends_with("/codex");
+                let process_name = process_names.get(&pid).map(String::as_str);
+                #[cfg(target_os = "macos")]
+                let bundle_identifier = read_macos_app_bundle_identifier(&command, process_name);
+                #[cfg(not(target_os = "macos"))]
+                let bundle_identifier: Option<String> = None;
+                let is_codex_desktop = is_macos_codex_desktop_process(
+                    &command,
+                    process_name,
+                    bundle_identifier.as_deref(),
+                );
+
+                if !is_codex_cli && !is_codex_desktop {
+                    continue;
+                }
+
+                if pid == std::process::id() || pids.contains(&pid) {
+                    continue;
+                }
+
+                let is_ide_plugin = is_ide_plugin_process(&lowercase_command);
+                let is_app_server = lowercase_command.contains("codex app-server");
+                let has_tty = tty != "??" && tty != "?";
+
+                if is_ide_plugin || is_app_server {
+                    bg_count += 1;
+                    continue;
+                }
+
+                if is_codex_desktop || has_tty {
+                    pids.push(pid);
+                } else {
+                    bg_count += 1;
+                }
+            }
+        }
+
+        pids.sort_unstable();
+        pids.dedup();
+
+        return Ok((pids, bg_count));
+    }
+
+    #[cfg(windows)]
+    {
+        return find_windows_codex_processes();
+    }
+
+    #[allow(unreachable_code)]
+    Ok((Vec::new(), 0))
+}
+
 /// Find all running processes for the given tool. Returns (active_pids, background_count)
 fn find_processes(tool: ToolKind) -> anyhow::Result<(Vec<u32>, usize)> {
+    match tool {
+        ToolKind::Codex => find_codex_processes(),
+        ToolKind::Claude | ToolKind::Cursor => find_non_codex_processes(tool),
+    }
+}
+
+fn find_non_codex_processes(tool: ToolKind) -> anyhow::Result<(Vec<u32>, usize)> {
     let patterns = tool.patterns();
 
     #[cfg(unix)]
@@ -539,6 +644,68 @@ fn read_unix_process_names() -> HashMap<u32, String> {
 }
 
 #[cfg(unix)]
+fn is_macos_codex_desktop_process(
+    command: &str,
+    process_name: Option<&str>,
+    bundle_identifier: Option<&str>,
+) -> bool {
+    #[cfg(not(target_os = "macos"))]
+    let _ = bundle_identifier;
+
+    const LEGACY_EXECUTABLE_SUFFIX: &str = "/Codex.app/Contents/MacOS/Codex";
+    #[cfg(target_os = "macos")]
+    const CURRENT_EXECUTABLE_SUFFIX: &str = "/ChatGPT.app/Contents/MacOS/ChatGPT";
+    #[cfg(target_os = "macos")]
+    const CODEX_BUNDLE_IDENTIFIER: &str = "com.openai.codex";
+
+    let executable_suffix = match process_name {
+        Some("Codex") => LEGACY_EXECUTABLE_SUFFIX,
+        #[cfg(target_os = "macos")]
+        Some("ChatGPT") if bundle_identifier == Some(CODEX_BUNDLE_IDENTIFIER) => {
+            CURRENT_EXECUTABLE_SUFFIX
+        }
+        _ => return false,
+    };
+
+    command.find(executable_suffix).is_some_and(|index| {
+        command[index + executable_suffix.len()..]
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_app_bundle_identifier(command: &str, process_name: Option<&str>) -> Option<String> {
+    const APP_BUNDLE_SUFFIX: &str = "/ChatGPT.app";
+    const EXECUTABLE_SUFFIX: &str = "/ChatGPT.app/Contents/MacOS/ChatGPT";
+
+    if process_name != Some("ChatGPT") {
+        return None;
+    }
+
+    let executable_index = command.find(EXECUTABLE_SUFFIX)?;
+    let executable_end = executable_index + EXECUTABLE_SUFFIX.len();
+    if command[executable_end..]
+        .chars()
+        .next()
+        .is_some_and(|character| !character.is_whitespace())
+    {
+        return None;
+    }
+
+    let bundle_end = executable_index + APP_BUNDLE_SUFFIX.len();
+    let info_plist = std::path::Path::new(&command[..bundle_end]).join("Contents/Info.plist");
+    let value = plist::Value::from_file(info_plist).ok()?;
+
+    value
+        .as_dictionary()?
+        .get("CFBundleIdentifier")?
+        .as_string()
+        .map(str::to_owned)
+}
+
+#[cfg(unix)]
 fn is_macos_desktop_process(
     command: &str,
     process_name: Option<&str>,
@@ -557,6 +724,225 @@ fn is_macos_desktop_process(
             .desktop_macos_excludes
             .iter()
             .any(|exclude| command.contains(exclude))
+}
+
+#[cfg(windows)]
+fn find_windows_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
+    const POWERSHELL_SCRIPT: &str = r#"
+$windowTitles = @{}
+Get-Process -Name Codex,ChatGPT -ErrorAction SilentlyContinue | ForEach-Object {
+  $windowTitles[[uint32]$_.Id] = $_.MainWindowTitle
+}
+
+Get-CimInstance Win32_Process |
+  Where-Object { $_.Name -ieq 'Codex.exe' -or $_.Name -ieq 'ChatGPT.exe' } |
+  ForEach-Object {
+    [PSCustomObject]@{
+      Name = $_.Name
+      ProcessId = [uint32]$_.ProcessId
+      ParentProcessId = [uint32]$_.ParentProcessId
+      CommandLine = if ($_.CommandLine) { $_.CommandLine } else { '' }
+      ExecutablePath = if ($_.ExecutablePath) { $_.ExecutablePath } else { '' }
+      MainWindowTitle = if ($windowTitles.ContainsKey([uint32]$_.ProcessId)) {
+        [string]$windowTitles[[uint32]$_.ProcessId]
+      } else {
+        ''
+      }
+    }
+  } |
+  ConvertTo-Json -Compress
+"#;
+
+    let output = Command::new("powershell.exe")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            POWERSHELL_SCRIPT,
+        ])
+        .output()
+        .context("failed to query Windows process list")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("PowerShell process query failed: {}", stderr.trim());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let processes = parse_windows_codex_processes(&stdout)?;
+
+    Ok(classify_windows_codex_processes(&processes))
+}
+
+#[cfg(any(windows, test))]
+fn classify_windows_codex_processes(processes: &[WindowsCodexProcess]) -> (Vec<u32>, usize) {
+    let mut active_pids = Vec::new();
+    let mut ignored_count = 0;
+
+    for process in processes
+        .iter()
+        .filter(|process| is_windows_codex_root_process(process))
+    {
+        let command = process.command_line.to_ascii_lowercase();
+        if is_ide_plugin_process(&command) {
+            ignored_count += 1;
+            continue;
+        }
+
+        let has_window = !process.main_window_title.trim().is_empty();
+        let has_renderer =
+            windows_has_descendant_matching(process.process_id, processes, |child| {
+                child
+                    .command_line
+                    .to_ascii_lowercase()
+                    .contains("--type=renderer")
+            });
+        let has_app_server =
+            windows_has_descendant_matching(process.process_id, processes, |child| {
+                let command = normalize_windows_path(&child.command_line);
+                command.contains("resources\\codex.exe") && command.contains("app-server")
+            });
+
+        if has_window || has_renderer || has_app_server {
+            active_pids.push(process.process_id);
+        } else {
+            ignored_count += 1;
+        }
+    }
+
+    active_pids.sort_unstable();
+    active_pids.dedup();
+
+    (active_pids, ignored_count)
+}
+
+#[cfg(any(windows, test))]
+fn parse_windows_codex_processes(stdout: &str) -> anyhow::Result<Vec<WindowsCodexProcess>> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_str(trimmed).context("failed to parse Windows process JSON")?;
+
+    match value {
+        serde_json::Value::Array(values) => values
+            .into_iter()
+            .map(|value| {
+                serde_json::from_value(value)
+                    .context("failed to deserialize Windows Codex process entry")
+            })
+            .collect(),
+        value => Ok(vec![serde_json::from_value(value)
+            .context("failed to deserialize Windows Codex process entry")?]),
+    }
+}
+
+#[cfg(any(windows, test))]
+fn is_windows_codex_root_process(process: &WindowsCodexProcess) -> bool {
+    let name = process.name.to_ascii_lowercase();
+    let command = normalize_windows_path(&process.command_line);
+
+    if command.contains("codex-switcher") || command.contains("--type=") {
+        return false;
+    }
+
+    if name == "codex.exe" {
+        let executable_path = normalize_windows_path(&process.executable_path);
+        return !command.contains("resources\\codex.exe")
+            && !executable_path.contains("resources\\codex.exe");
+    }
+
+    name == "chatgpt.exe" && is_windows_codex_package_chatgpt_process(process)
+}
+
+#[cfg(any(windows, test))]
+fn is_windows_codex_package_chatgpt_process(process: &WindowsCodexProcess) -> bool {
+    let executable_path = process.executable_path.trim();
+    if !executable_path.is_empty() {
+        return is_windows_codex_package_chatgpt_path(executable_path);
+    }
+
+    windows_command_executable_path(&process.command_line)
+        .is_some_and(is_windows_codex_package_chatgpt_path)
+}
+
+#[cfg(any(windows, test))]
+fn is_windows_codex_package_chatgpt_path(path: &str) -> bool {
+    let normalized = normalize_windows_path(path.trim().trim_matches('"'));
+    let Some(package_path) = normalized.strip_suffix("\\app\\chatgpt.exe") else {
+        return false;
+    };
+    let mut components = package_path.rsplit('\\');
+    let Some(package_name) = components.next() else {
+        return false;
+    };
+    let Some(package_parent) = components.next() else {
+        return false;
+    };
+
+    package_parent == "windowsapps"
+        && package_name.starts_with("openai.codex_")
+        && package_name.ends_with("__2p2nqsd0c76g0")
+}
+
+#[cfg(any(windows, test))]
+fn windows_command_executable_path(command: &str) -> Option<&str> {
+    let command = command.trim_start();
+    if let Some(quoted) = command.strip_prefix('"') {
+        return quoted
+            .split_once('"')
+            .map(|(path, _)| path)
+            .filter(|path| !path.is_empty());
+    }
+
+    command.split_whitespace().next()
+}
+
+#[cfg(any(windows, test))]
+fn normalize_windows_path(value: &str) -> String {
+    value.replace('/', "\\").to_ascii_lowercase()
+}
+
+#[cfg(any(unix, windows, test))]
+fn is_ide_plugin_process(command: &str) -> bool {
+    command.contains(".antigravity")
+        || command.contains("openai.chatgpt")
+        || command.contains(".vscode")
+}
+
+#[cfg(any(windows, test))]
+fn windows_has_descendant_matching<F>(
+    root_pid: u32,
+    processes: &[WindowsCodexProcess],
+    mut predicate: F,
+) -> bool
+where
+    F: FnMut(&WindowsCodexProcess) -> bool,
+{
+    let mut queue = vec![root_pid];
+    let mut visited = HashSet::new();
+
+    while let Some(parent_pid) = queue.pop() {
+        for process in processes
+            .iter()
+            .filter(|process| process.parent_process_id == parent_pid)
+        {
+            if !visited.insert(process.process_id) {
+                continue;
+            }
+
+            if predicate(process) {
+                return true;
+            }
+
+            queue.push(process.process_id);
+        }
+    }
+
+    false
 }
 
 #[cfg(windows)]
@@ -634,7 +1020,7 @@ Get-CimInstance Win32_Process |
 
         let has_window = !process.main_window_title.trim().is_empty();
         let has_renderer =
-            windows_has_descendant_matching(process.process_id, &processes, |child| {
+            windows_tool_has_descendant_matching(process.process_id, &processes, |child| {
                 child
                     .command_line
                     .to_ascii_lowercase()
@@ -643,7 +1029,7 @@ Get-CimInstance Win32_Process |
         let has_app_server = patterns
             .windows_app_server_marker
             .map(|marker| {
-                windows_has_descendant_matching(process.process_id, &processes, |child| {
+                windows_tool_has_descendant_matching(process.process_id, &processes, |child| {
                     let command = child.command_line.to_ascii_lowercase();
                     patterns
                         .windows_bundled_cli_marker
@@ -712,7 +1098,7 @@ fn is_windows_root_process(process: &WindowsToolProcess, patterns: ToolPatterns)
 }
 
 #[cfg(windows)]
-fn windows_has_descendant_matching<F>(
+fn windows_tool_has_descendant_matching<F>(
     root_pid: u32,
     processes: &[WindowsToolProcess],
     mut predicate: F,
@@ -1076,30 +1462,286 @@ fn is_windows_codex_shortcut_name(file_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    #[test]
-    fn detects_only_macos_desktop_root_process() {
-        let patterns = super::ToolKind::Codex.patterns();
+    use super::is_macos_codex_desktop_process;
+    use super::{
+        classify_windows_codex_processes, is_windows_codex_root_process,
+        parse_windows_codex_processes, WindowsCodexProcess,
+    };
 
-        assert!(super::is_macos_desktop_process(
+    fn windows_process(
+        name: &str,
+        process_id: u32,
+        parent_process_id: u32,
+        executable_path: &str,
+        command_line: &str,
+        main_window_title: &str,
+    ) -> WindowsCodexProcess {
+        WindowsCodexProcess {
+            name: name.to_string(),
+            process_id,
+            parent_process_id,
+            command_line: command_line.to_string(),
+            executable_path: executable_path.to_string(),
+            main_window_title: main_window_title.to_string(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detects_only_the_legacy_macos_codex_desktop_root_process() {
+        assert!(is_macos_codex_desktop_process(
+            "/Applications/Codex.app/Contents/MacOS/Codex",
+            Some("Codex"),
+            None
+        ));
+        assert!(is_macos_codex_desktop_process(
+            "/Users/test/Applications With Spaces/Codex.app/Contents/MacOS/Codex --flag",
+            Some("Codex"),
+            None
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service) --type=gpu-process",
+            Some("Codex (Service)"),
+            None
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --type=renderer",
+            Some("Codex (Renderer)"),
+            None
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/Codex.app/Contents/Resources/codex app-server",
+            Some("codex"),
+            None
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --app-executable /Applications/Codex.app/Contents/MacOS/Codex --type=renderer",
+            Some("Codex (Renderer)"),
+            None
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn detects_only_the_current_macos_codex_desktop_root_process() {
+        assert!(is_macos_codex_desktop_process(
             "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
             Some("ChatGPT"),
-            patterns
+            Some("com.openai.codex")
         ));
-        assert!(super::is_macos_desktop_process(
+        assert!(is_macos_codex_desktop_process(
             "/Users/test/Applications With Spaces/ChatGPT.app/Contents/MacOS/ChatGPT --flag",
             Some("ChatGPT"),
-            patterns
+            Some("com.openai.codex")
         ));
-        assert!(!super::is_macos_desktop_process(
-            "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.115/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --type=renderer --app-executable /Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+            Some("ChatGPT"),
+            Some("com.openai.chat")
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+            Some("ChatGPT"),
+            None
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+            Some("Codex"),
+            Some("com.openai.codex")
+        ));
+        assert!(!is_macos_codex_desktop_process(
+            "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --app-executable /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --type=renderer",
             Some("Codex (Renderer)"),
-            patterns
+            Some("com.openai.codex")
         ));
-        assert!(!super::is_macos_desktop_process(
-            "/Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled",
-            Some("codex"),
-            patterns
+    }
+
+    #[test]
+    fn parses_legacy_and_current_windows_process_snapshots() {
+        let processes = parse_windows_codex_processes(
+            r#"[
+                {"Name":"Codex.exe","ProcessId":10,"ParentProcessId":1,"CommandLine":"Codex.exe","MainWindowTitle":"Codex"},
+                {"Name":"ChatGPT.exe","ProcessId":20,"ParentProcessId":1,"CommandLine":"ChatGPT.exe","ExecutablePath":"C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\\app\\ChatGPT.exe","MainWindowTitle":"Codex"}
+            ]"#,
+        )
+        .expect("legacy and current process snapshots should parse");
+
+        assert_eq!(processes.len(), 2);
+        assert_eq!(processes[0].name, "Codex.exe");
+        assert!(processes[0].executable_path.is_empty());
+        assert_eq!(processes[1].name, "ChatGPT.exe");
+        assert!(processes[1].executable_path.ends_with(r"\app\ChatGPT.exe"));
+    }
+
+    #[test]
+    fn parses_single_windows_process_snapshot() {
+        let processes = parse_windows_codex_processes(
+            r#"{"Name":"Codex.exe","ProcessId":10,"ParentProcessId":1,"CommandLine":"Codex.exe","MainWindowTitle":"Codex"}"#,
+        )
+        .expect("single process snapshot should parse");
+
+        assert_eq!(processes.len(), 1);
+        assert_eq!(processes[0].process_id, 10);
+    }
+
+    #[test]
+    fn windows_root_detection_supports_legacy_and_current_packages() {
+        let legacy_root = windows_process(
+            "Codex.exe",
+            10,
+            1,
+            r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
+            r#""C:\Users\test\AppData\Local\Programs\Codex\Codex.exe""#,
+            "Codex",
+        );
+        let current_root = windows_process(
+            "ChatGPT.exe",
+            20,
+            1,
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+            r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#,
+            "Codex",
+        );
+        let current_root_from_command = windows_process(
+            "ChatGPT.exe",
+            21,
+            1,
+            "",
+            r#""D:\WindowsApps\OpenAI.Codex_26.707.9999.0_arm64__2p2nqsd0c76g0\app\ChatGPT.exe" --flag"#,
+            "Codex",
+        );
+
+        assert!(is_windows_codex_root_process(&legacy_root));
+        assert!(is_windows_codex_root_process(&current_root));
+        assert!(is_windows_codex_root_process(&current_root_from_command));
+    }
+
+    #[test]
+    fn windows_root_detection_rejects_helpers_backends_and_unrelated_chatgpt() {
+        let bundled_backend = windows_process(
+            "Codex.exe",
+            30,
+            20,
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\resources\codex.exe",
+            "",
+            "",
+        );
+        let packaged_renderer = windows_process(
+            "ChatGPT.exe",
+            31,
+            20,
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+            r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe" --type=renderer"#,
+            "",
+        );
+        let unrelated_chatgpt = windows_process(
+            "ChatGPT.exe",
+            32,
+            1,
+            r"C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+            r#""C:\Program Files\WindowsApps\OpenAI.ChatGPT_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#,
+            "ChatGPT",
+        );
+        let wrong_publisher = windows_process(
+            "ChatGPT.exe",
+            33,
+            1,
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__notcodex\app\ChatGPT.exe",
+            "",
+            "Codex",
+        );
+        let lookalike_outside_windows_apps = windows_process(
+            "ChatGPT.exe",
+            34,
+            1,
+            r"C:\Temp\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+            "",
+            "Codex",
+        );
+        let spoofed_argument = windows_process(
+            "ChatGPT.exe",
+            35,
+            1,
+            "",
+            r#""C:\Program Files\ChatGPT\ChatGPT.exe" --inspect "C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#,
+            "ChatGPT",
+        );
+
+        assert!(!is_windows_codex_root_process(&bundled_backend));
+        assert!(!is_windows_codex_root_process(&packaged_renderer));
+        assert!(!is_windows_codex_root_process(&unrelated_chatgpt));
+        assert!(!is_windows_codex_root_process(&wrong_publisher));
+        assert!(!is_windows_codex_root_process(
+            &lookalike_outside_windows_apps
         ));
+        assert!(!is_windows_codex_root_process(&spoofed_argument));
+    }
+
+    #[test]
+    fn classifies_legacy_and_current_windows_trees_by_root_pid() {
+        let processes = vec![
+            windows_process(
+                "Codex.exe",
+                100,
+                1,
+                r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
+                r#""C:\Users\test\AppData\Local\Programs\Codex\Codex.exe""#,
+                "",
+            ),
+            windows_process(
+                "Codex.exe",
+                101,
+                100,
+                r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
+                r#""C:\Users\test\AppData\Local\Programs\Codex\Codex.exe" --type=renderer"#,
+                "",
+            ),
+            windows_process(
+                "ChatGPT.exe",
+                200,
+                1,
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+                r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#,
+                "",
+            ),
+            windows_process(
+                "Codex.exe",
+                201,
+                200,
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\resources\codex.exe",
+                r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\resources\codex.exe" app-server"#,
+                "",
+            ),
+        ];
+
+        assert_eq!(
+            classify_windows_codex_processes(&processes),
+            (vec![100, 200], 0)
+        );
+    }
+
+    #[test]
+    fn ignores_stale_legacy_and_current_windows_roots() {
+        let processes = vec![
+            windows_process(
+                "Codex.exe",
+                100,
+                1,
+                r"C:\Users\test\AppData\Local\Programs\Codex\Codex.exe",
+                r#""C:\Users\test\AppData\Local\Programs\Codex\Codex.exe""#,
+                "",
+            ),
+            windows_process(
+                "ChatGPT.exe",
+                200,
+                1,
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe",
+                r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe""#,
+                "",
+            ),
+        ];
+
+        assert_eq!(classify_windows_codex_processes(&processes), (vec![], 2));
     }
 
     #[test]
@@ -1109,6 +1751,7 @@ mod tests {
         assert!(!super::is_windows_codex_shortcut_name("AI Switcher.lnk"));
         assert!(!super::is_windows_codex_shortcut_name("ai-switcher.lnk"));
         assert!(!super::is_windows_codex_shortcut_name("Codex Switcher.lnk"));
+        assert!(!super::is_windows_codex_shortcut_name("codex-switcher.lnk"));
         assert!(!super::is_windows_codex_shortcut_name("Codex.txt"));
     }
 }
