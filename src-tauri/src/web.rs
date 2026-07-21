@@ -17,7 +17,8 @@ use crate::commands::{
     delete_account, export_accounts_full_encrypted_bytes, export_accounts_slim_text,
     get_account_usage_stats, get_active_account_info, get_discord_presence_enabled,
     get_masked_account_ids, get_usage, import_accounts_full_encrypted_bytes,
-    import_accounts_slim_text, kill_codex_processes, list_accounts, open_codex_app,
+    import_accounts_slim_text, kill_codex_processes, kill_tool_processes, list_accounts,
+    open_codex_app,
     refresh_account_metadata, refresh_all_accounts_usage, rename_account,
     set_discord_presence_enabled, set_masked_account_ids, start_claude_login, start_login,
     switch_account, warmup_account, warmup_all_accounts,
@@ -257,6 +258,14 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             to_json(check_processes(args.tool).await?)
         }
         "kill_codex_processes" => to_json(kill_codex_processes().await?),
+        "kill_tool_processes" => {
+            #[derive(Debug, Deserialize)]
+            struct KillToolProcessesArgs {
+                tool: ToolKind,
+            }
+            let args: KillToolProcessesArgs = parse_args(payload)?;
+            to_json(kill_tool_processes(args.tool).await?)
+        }
         "open_codex_app" => to_json(open_codex_app().await?),
         "get_discord_presence_enabled" => to_json(get_discord_presence_enabled().await?),
         "set_discord_presence_enabled" => {

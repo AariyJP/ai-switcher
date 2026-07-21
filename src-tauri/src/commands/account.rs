@@ -1,7 +1,6 @@
 //! Account management Tauri commands
 
-use super::process::ensure_codex_not_running;
-use super::tool_process::check_processes;
+use super::tool_process::{check_processes, ensure_tool_not_running};
 use crate::api::usage::fetch_cursor_account_metadata;
 use crate::auth::{
     add_account, create_chatgpt_account_from_refresh_token, import_current_claude_account,
@@ -211,9 +210,7 @@ pub async fn switch_account(account_id: String) -> Result<(), String> {
 
     let tool = account.tool;
 
-    if tool == ToolKind::Codex {
-        ensure_codex_not_running()?;
-    }
+    ensure_tool_not_running(tool)?;
 
     match &account.auth_data {
         AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {

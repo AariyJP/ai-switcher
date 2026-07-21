@@ -1,5 +1,6 @@
 use std::process::Command;
 
+use super::process::KillCodexProcessesResult;
 use crate::types::ToolKind;
 
 #[cfg(windows)]
@@ -8,7 +9,7 @@ use anyhow::Context;
 #[cfg(unix)]
 use std::collections::HashMap;
 
-#[cfg(windows)]
+#[cfg(any(unix, windows))]
 use std::collections::HashSet;
 
 #[cfg(windows)]
@@ -132,6 +133,146 @@ pub async fn check_processes(tool: ToolKind) -> Result<ProcessInfo, String> {
         can_switch: count == 0,
         pids,
     })
+}
+
+pub(crate) fn ensure_tool_not_running(tool: ToolKind) -> Result<(), String> {
+    if tool == ToolKind::Codex {
+        return super::process::ensure_codex_not_running();
+    }
+
+    let (pids, _) = find_non_codex_processes(tool).map_err(|e| e.to_string())?;
+    if pids.is_empty() {
+        return Ok(());
+    }
+
+    let label = match tool {
+        ToolKind::Claude => "Claude",
+        _ => "Cursor",
+    };
+    Err(format!(
+        "Cannot switch accounts while {} {label} process{} running",
+        pids.len(),
+        if pids.len() == 1 { " is" } else { "es are" }
+    ))
+}
+
+#[tauri::command]
+pub async fn kill_tool_processes(tool: ToolKind) -> Result<KillCodexProcessesResult, String> {
+    match tool {
+        ToolKind::Codex => super::process::kill_codex_processes().await,
+        ToolKind::Claude | ToolKind::Cursor => {
+            tokio::task::spawn_blocking(move || kill_tool_processes_blocking(tool))
+                .await
+                .map_err(|e| e.to_string())?
+        }
+    }
+}
+
+fn kill_tool_processes_blocking(tool: ToolKind) -> Result<KillCodexProcessesResult, String> {
+    let (pids, _) = find_non_codex_processes(tool).map_err(|e| e.to_string())?;
+    let targeted_count = pids.len();
+    let mut killed_pids = Vec::new();
+    let mut failed_pids = Vec::new();
+
+    #[cfg(unix)]
+    let targets = expand_tool_process_targets(&pids, &read_unix_children_by_parent());
+
+    #[cfg(windows)]
+    let targets = pids;
+
+    for pid in targets {
+        if force_kill_tool_process(pid) {
+            killed_pids.push(pid);
+        } else {
+            failed_pids.push(pid);
+        }
+    }
+
+    Ok(KillCodexProcessesResult {
+        targeted_count,
+        killed_pids,
+        failed_pids,
+    })
+}
+
+#[cfg(unix)]
+fn read_unix_children_by_parent() -> HashMap<u32, Vec<u32>> {
+    let Ok(output) = Command::new("ps").args(["-axo", "pid=,ppid="]).output() else {
+        return HashMap::new();
+    };
+
+    let mut children_by_parent: HashMap<u32, Vec<u32>> = HashMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(pid_str), Some(ppid_str)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let (Ok(pid), Ok(ppid)) = (pid_str.parse::<u32>(), ppid_str.parse::<u32>()) else {
+            continue;
+        };
+        children_by_parent.entry(ppid).or_default().push(pid);
+    }
+
+    children_by_parent
+}
+
+#[cfg(unix)]
+fn expand_tool_process_targets(
+    root_pids: &[u32],
+    children_by_parent: &HashMap<u32, Vec<u32>>,
+) -> Vec<u32> {
+    let mut targets = Vec::new();
+    let mut visited = HashSet::new();
+
+    for root_pid in root_pids {
+        let mut stack = children_by_parent
+            .get(root_pid)
+            .cloned()
+            .unwrap_or_default();
+        while let Some(pid) = stack.pop() {
+            if !visited.insert(pid) {
+                continue;
+            }
+            targets.push(pid);
+
+            if let Some(children) = children_by_parent.get(&pid) {
+                stack.extend(children.iter().copied());
+            }
+        }
+    }
+
+    for root_pid in root_pids {
+        if visited.insert(*root_pid) {
+            targets.push(*root_pid);
+        }
+    }
+
+    targets
+}
+
+fn force_kill_tool_process(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        return Command::new("/bin/kill")
+            .arg("-9")
+            .arg(pid.to_string())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+    }
+
+    #[cfg(windows)]
+    {
+        return Command::new("taskkill")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+    }
+
+    #[allow(unreachable_code)]
+    false
 }
 
 fn find_non_codex_processes(tool: ToolKind) -> anyhow::Result<(Vec<u32>, usize)> {
