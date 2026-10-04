@@ -362,7 +362,7 @@ fn set_activity(
             activity = activity.state(&pondering);
         }
         RunningApp::Codex => activity = activity.state("＊ Working"),
-        RunningApp::Cursor => {}
+        RunningApp::Cursor => activity = activity.state("Thinking briefly"),
     }
 
     client.set_activity(activity)
