@@ -293,7 +293,7 @@ pub(crate) struct ToolProcessScan {
     pub cli_running: bool,
 }
 
-pub(crate) fn find_non_codex_processes(tool: ToolKind) -> anyhow::Result<(Vec<u32>, usize)> {
+fn find_non_codex_processes(tool: ToolKind) -> anyhow::Result<(Vec<u32>, usize)> {
     scan_non_codex_processes(tool).map(|scan| (scan.pids, scan.background_count))
 }
 

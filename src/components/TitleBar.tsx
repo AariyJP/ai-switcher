@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { isTauriRuntime } from "@/lib/platform";
 import { getTauriWindow } from "@/lib/tauriWindow";
 import { cn } from "@/lib/utils";
 
@@ -18,30 +17,30 @@ export function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false);
 
   const handleDrag = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!isTauriRuntime() || event.button !== 0) return;
+    if (event.button !== 0) return;
     void getTauriWindow()?.startDragging();
   }, []);
 
   const handleDoubleClick = useCallback(() => {
-    if (!isTauriRuntime()) return;
     void getTauriWindow()?.toggleMaximize();
   }, []);
 
   useEffect(() => {
-    if (!isTauriRuntime() || isMacOs) return;
+    const appWindow = getTauriWindow();
+    if (!appWindow || isMacOs) return;
     let unlisten: (() => void) | undefined;
 
     const sync = async () => {
       try {
-        setIsMaximized((await getTauriWindow()?.isMaximized()) ?? false);
+        setIsMaximized(await appWindow.isMaximized());
       } catch (err) {
         console.error("Failed to read window state:", err);
       }
     };
     void sync();
 
-    getTauriWindow()
-      ?.onResized(() => {
+    appWindow
+      .onResized(() => {
         void sync();
       })
       .then((fn) => {

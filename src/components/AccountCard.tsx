@@ -505,7 +505,7 @@ export function AccountCard({
             accountId={account.id}
             enabled={account.auth_mode === "chat_g_p_t"}
             open={statsOpen}
-            onOpenChange={toggleStatsOpen}
+            onToggle={toggleStatsOpen}
             usage={account.usage}
             usageLoading={account.usageLoading}
           />

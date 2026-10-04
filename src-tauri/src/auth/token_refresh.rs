@@ -81,22 +81,19 @@ pub(crate) async fn ensure_chatgpt_tokens_fresh_locked(
     // the lock. Prefer those live credentials over rotating the stored token.
     let (current, _) = load_account_reconciling_live_auth(&account.id)?;
 
-    match &current.auth_data {
-        AuthData::ApiKey { .. }
-        | AuthData::ClaudeCode { .. }
-        | AuthData::ClaudeDesktop { .. }
-        | AuthData::Cursor { .. } => Ok(current.clone()),
-        AuthData::ChatGPT {
-            id_token,
-            access_token,
-            ..
-        } => {
-            if chatgpt_tokens_need_refresh_at(id_token, access_token, Utc::now().timestamp()) {
-                refresh_chatgpt_tokens_locked(&current).await
-            } else {
-                Ok(current)
-            }
-        }
+    let AuthData::ChatGPT {
+        id_token,
+        access_token,
+        ..
+    } = &current.auth_data
+    else {
+        return Ok(current);
+    };
+
+    if chatgpt_tokens_need_refresh_at(id_token, access_token, Utc::now().timestamp()) {
+        refresh_chatgpt_tokens_locked(&current).await
+    } else {
+        Ok(current)
     }
 }
 
@@ -145,18 +142,17 @@ async fn refresh_chatgpt_tokens_locked(account: &StoredAccount) -> Result<Stored
         return Ok(current);
     }
 
-    let (current_id_token, current_refresh_token, current_account_id) = match &current.auth_data {
-        AuthData::ChatGPT {
-            id_token,
-            refresh_token,
-            account_id,
-            ..
-        } => (id_token.clone(), refresh_token.clone(), account_id.clone()),
-        AuthData::ApiKey { .. }
-        | AuthData::ClaudeCode { .. }
-        | AuthData::ClaudeDesktop { .. }
-        | AuthData::Cursor { .. } => return Ok(current),
+    let AuthData::ChatGPT {
+        id_token,
+        refresh_token,
+        account_id,
+        ..
+    } = &current.auth_data
+    else {
+        return Ok(current);
     };
+    let (current_id_token, current_refresh_token, current_account_id) =
+        (id_token.clone(), refresh_token.clone(), account_id.clone());
 
     if current_refresh_token.is_empty() {
         anyhow::bail!("Missing refresh token for account {}", current.name);
@@ -310,16 +306,15 @@ async fn refresh_claude_tokens_inner(
 }
 
 fn chatgpt_tokens_need_refresh(account: &StoredAccount) -> bool {
-    match &account.auth_data {
-        AuthData::ApiKey { .. }
-        | AuthData::ClaudeCode { .. }
-        | AuthData::ClaudeDesktop { .. }
-        | AuthData::Cursor { .. } => false,
-        AuthData::ChatGPT {
-            id_token,
-            access_token,
-            ..
-        } => chatgpt_tokens_need_refresh_at(id_token, access_token, Utc::now().timestamp()),
+    if let AuthData::ChatGPT {
+        id_token,
+        access_token,
+        ..
+    } = &account.auth_data
+    {
+        chatgpt_tokens_need_refresh_at(id_token, access_token, Utc::now().timestamp())
+    } else {
+        false
     }
 }
 

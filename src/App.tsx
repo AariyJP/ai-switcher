@@ -531,22 +531,22 @@ function App() {
   }, [themeMode]);
 
   const handleSwitch = async (accountId: string) => {
-    const latest = await checkProcesses();
-    const activeProcessInfo =
-      latest &&
-      (backendTarget.tool === "codex" || backendTarget.tool === "claude"
-        ? latest[backendTarget.tool]
-        : null);
-    if (backendTarget.tool === "codex" && !latest) {
-      toast.error("Could not check running Codex processes. Try again.");
-      return;
-    }
-    if (activeProcessInfo && !activeProcessInfo.can_switch) {
-      if (backendTarget.tool === "codex") {
-        setPendingSwitchAccountId(accountId);
-        setForceCloseConfirmOpen(true);
+    const tool = backendTarget.tool;
+    const requestCodexClose = () => {
+      setPendingSwitchAccountId(accountId);
+      setForceCloseConfirmOpen(true);
+    };
+
+    if (tool !== "cursor") {
+      const latest = await checkProcesses();
+      if (!latest && tool === "codex") {
+        toast.error("Could not check running Codex processes. Try again.");
+        return;
       }
-      return;
+      if (latest && !latest[tool].can_switch) {
+        if (tool === "codex") requestCodexClose();
+        return;
+      }
     }
 
     try {
@@ -554,11 +554,9 @@ function App() {
       await switchAccount(accountId);
     } catch (err) {
       console.error("Failed to switch account:", err);
-      const codexProcessInfo =
-        backendTarget.tool === "codex" ? (await checkProcesses())?.codex : null;
+      const codexProcessInfo = tool === "codex" ? await checkCodexProcesses() : null;
       if (codexProcessInfo && !codexProcessInfo.can_switch) {
-        setPendingSwitchAccountId(accountId);
-        setForceCloseConfirmOpen(true);
+        requestCodexClose();
       } else {
         toast.error(
           err instanceof Error ? err.message : "Failed to switch account"
@@ -637,10 +635,16 @@ function App() {
     }
   }, []);
 
-  const checkCodexProcesses = useCallback(
-    async () => (await checkProcesses())?.codex ?? null,
-    [checkProcesses]
-  );
+  const checkCodexProcesses = useCallback(async () => {
+    try {
+      const codex = await invokeBackend<ProcessInfo>("check_processes", { tool: "codex" });
+      setProcessInfoByTool((prev) => ({ ...prev, codex }));
+      return codex;
+    } catch (err) {
+      console.error("Failed to check processes:", err);
+      return null;
+    }
+  }, []);
 
   const {
     forceCloseConfirmOpen,
@@ -1080,7 +1084,8 @@ function App() {
     : "Close Codex";
   const codexProcessInfo = processInfoByTool.codex;
   const claudeProcessInfo = processInfoByTool.claude;
-  const hasRunningCodex = !!codexProcessInfo && codexProcessInfo.count > 0;
+  const codexProcessCount = codexProcessInfo?.count ?? 0;
+  const hasRunningCodex = codexProcessCount > 0;
   const hasRunningClaude = !!claudeProcessInfo && claudeProcessInfo.count > 0;
   const usageEnabled = true;
   const warmupEnabled =
@@ -1093,6 +1098,8 @@ function App() {
       : activeTool === "claude_code" || activeTool === "claude_desktop"
         ? hasRunningClaude
         : false;
+  const codexRunning = activeTool === "codex" && hasRunningCodex;
+  const switchBlocked = hasRunningActiveTool && !codexRunning;
   const activeToolLabel =
     activeTool === "codex"
       ? "Codex"
@@ -1247,7 +1254,7 @@ function App() {
                       {codexProcessInfo.count} Codex running
                     </Badge>
                   )}
-                  {codexProcessInfo && hasRunningCodex && (
+                  {hasRunningCodex && (
                     <Button
                       variant="destructive"
                       size="sm"
@@ -1596,8 +1603,8 @@ function App() {
                   }
                   onRename={(newName) => renameAccount(activeAccount.id, newName)}
                   switching={switchingId === activeAccount.id}
-                  switchDisabled={hasRunningActiveTool && activeTool !== "codex"}
-                  codexRunning={activeTool === "codex" && hasRunningCodex}
+                  switchDisabled={switchBlocked}
+                  codexRunning={codexRunning}
                   switchDisabledLabel={switchDisabledLabel}
                   switchDisabledTooltip={switchDisabledTooltip}
                   warmingUp={
@@ -1687,8 +1694,8 @@ function App() {
                       }
                       onRename={(newName) => renameAccount(account.id, newName)}
                       switching={switchingId === account.id}
-                      switchDisabled={hasRunningActiveTool && activeTool !== "codex"}
-                      codexRunning={activeTool === "codex" && hasRunningCodex}
+                      switchDisabled={switchBlocked}
+                      codexRunning={codexRunning}
                       switchDisabledLabel={switchDisabledLabel}
                       switchDisabledTooltip={switchDisabledTooltip}
                       warmingUp={
@@ -1865,7 +1872,7 @@ function App() {
         onReopenPreferenceChange={saveDesktopReopenPreference}
         closePreference={codexClose.preference}
         onClosePreferenceChange={saveCodexClosePreference}
-        onClose={() => setIsSettingsOpen(false)}
+        onOpenChange={setIsSettingsOpen}
       />
 
       <AlertDialog
@@ -1881,9 +1888,8 @@ function App() {
             <AlertDialogTitle>Close running Codex processes?</AlertDialogTitle>
             <AlertDialogDescription>
               This will {codexClose.forceClose ? "force close" : "gracefully close"}{" "}
-              {codexProcessInfo?.count ?? 0} Codex process
-              {(codexProcessInfo?.count ?? 0) === 1 ? "" : "es"} that currently{" "}
-              {(codexProcessInfo?.count ?? 0) === 1 ? "blocks" : "block"} account switching.
+              {codexProcessCount} Codex {pluralize(codexProcessCount, "process", "processes")} that
+              currently {pluralize(codexProcessCount, "blocks", "block")} account switching.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="bg-muted flex flex-col gap-2 rounded-lg border p-3">

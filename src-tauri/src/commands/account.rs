@@ -225,37 +225,32 @@ pub async fn switch_account_by_id(account_id: &str) -> Result<(), String> {
 
     ensure_tool_not_running(tool)?;
 
-    if matches!(
-        store.accounts[target_index].auth_data,
-        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. }
-    ) {
-        // ChatGPT rotates single-use refresh tokens. Preserve the latest token
-        // before replacing auth.json, otherwise switching back restores a stale one.
-        if let Some(auth) = read_current_auth().map_err(|e| e.to_string())? {
-            if sync_active_account_tokens(&mut store, &auth) {
-                save_accounts(&store).map_err(|e| e.to_string())?;
+    let account = store.accounts[target_index].clone();
+    match &account.auth_data {
+        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {
+            // ChatGPT rotates single-use refresh tokens. Preserve the latest token
+            // before replacing auth.json, otherwise switching back restores a stale one.
+            if let Some(auth) = read_current_auth().map_err(|e| e.to_string())? {
+                if sync_active_account_tokens(&mut store, &auth) {
+                    save_accounts(&store).map_err(|e| e.to_string())?;
+                }
             }
+
+            let account = ensure_chatgpt_tokens_fresh_locked(&account)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            // Write to ~/.codex/auth.json
+            switch_to_account(&account).map_err(|e| e.to_string())?;
         }
-
-        let account = ensure_chatgpt_tokens_fresh_locked(&store.accounts[target_index])
-            .await
-            .map_err(|e| e.to_string())?;
-
-        // Write to ~/.codex/auth.json
-        switch_to_account(&account).map_err(|e| e.to_string())?;
-    } else {
-        let account = &store.accounts[target_index];
-        match &account.auth_data {
-            AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {}
-            AuthData::ClaudeCode { .. } => {
-                switch_to_claude_account(account).map_err(|e| e.to_string())?;
-            }
-            AuthData::ClaudeDesktop { .. } => {
-                switch_to_claude_desktop_account(account).map_err(|e| e.to_string())?;
-            }
-            AuthData::Cursor { .. } => {
-                switch_to_cursor_account(account).map_err(|e| e.to_string())?;
-            }
+        AuthData::ClaudeCode { .. } => {
+            switch_to_claude_account(&account).map_err(|e| e.to_string())?;
+        }
+        AuthData::ClaudeDesktop { .. } => {
+            switch_to_claude_desktop_account(&account).map_err(|e| e.to_string())?;
+        }
+        AuthData::Cursor { .. } => {
+            switch_to_cursor_account(&account).map_err(|e| e.to_string())?;
         }
     }
 

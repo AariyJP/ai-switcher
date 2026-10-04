@@ -562,7 +562,7 @@ impl AccountInfo {
             // ID-token claims become stale and must not be used for display.
             subscription_expires_at: match &account.auth_data {
                 AuthData::ChatGPT { .. } => None,
-                _ => account.subscription_expires_at.clone(),
+                _ => account.subscription_expires_at,
             },
             tool: account.tool,
             auth_mode: account.auth_mode,

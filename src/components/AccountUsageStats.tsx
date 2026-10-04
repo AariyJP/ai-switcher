@@ -23,7 +23,7 @@ interface AccountUsageStatsProps {
   accountId: string;
   enabled: boolean;
   open: boolean;
-  onOpenChange: (open: boolean) => void;
+  onToggle: () => void;
   usage?: UsageInfo;
   usageLoading?: boolean;
   onStatsLoaded?: (stats: AccountUsageStatsInfo | null) => void;
@@ -378,7 +378,7 @@ export function AccountUsageStats({
   accountId,
   enabled,
   open,
-  onOpenChange,
+  onToggle,
   usage,
   usageLoading = false,
   onStatsLoaded,
@@ -460,7 +460,7 @@ export function AccountUsageStats({
         type="button"
         variant="ghost"
         className="h-auto w-full justify-between gap-3 px-1 py-1 text-sm font-semibold"
-        onClick={() => onOpenChange(!open)}
+        onClick={onToggle}
         aria-expanded={open}
       >
         <span className="flex min-w-0 items-center gap-2">

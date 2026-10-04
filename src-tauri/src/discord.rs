@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -10,6 +11,7 @@ use discord_rich_presence::{
 };
 use rand::Rng;
 
+use crate::commands::tool_process::{scan_non_codex_processes, ToolProcessScan};
 use crate::types::ToolKind;
 
 const DISCORD_CLIENT_ID: &str = "1509183960872128672";
@@ -245,27 +247,29 @@ pub fn start_discord_presence() {
 
         let mut client = DiscordIpcClient::new(DISCORD_CLIENT_ID);
 
-        let mut app = select_app(None, &running_apps());
-        if client.connect().is_ok() && set_activity(&mut client, start_time, app).is_ok() {
-            let mut last_set = Instant::now();
-            'connected: loop {
-                wait_while(presence_enabled, APP_CHECK_INTERVAL);
+        if client.connect().is_ok() {
+            let mut app = select_app(None);
+            if set_activity(&mut client, start_time, app).is_ok() {
+                let mut last_set = Instant::now();
+                'connected: loop {
+                    wait_while(presence_enabled, APP_CHECK_INTERVAL);
 
-                if !presence_enabled() {
-                    let _ = client.close();
-                    break 'connected;
-                }
+                    if !presence_enabled() {
+                        let _ = client.close();
+                        break 'connected;
+                    }
 
-                let current = select_app(app, &running_apps());
-                if current == app && last_set.elapsed() < RECONNECT_INTERVAL {
-                    continue;
-                }
-                app = current;
+                    let current = select_app(app);
+                    if current == app && last_set.elapsed() < RECONNECT_INTERVAL {
+                        continue;
+                    }
+                    app = current;
 
-                if set_activity(&mut client, start_time, app).is_err() {
-                    break;
+                    if set_activity(&mut client, start_time, app).is_err() {
+                        break;
+                    }
+                    last_set = Instant::now();
                 }
-                last_set = Instant::now();
             }
         }
 
@@ -300,36 +304,59 @@ impl RunningApp {
             RunningApp::Cursor => "https://cursor.com/apple-touch-icon.png",
         }
     }
+
+    fn state(self) -> Cow<'static, str> {
+        match self {
+            RunningApp::ClaudeDesktop | RunningApp::ClaudeCode => {
+                let idx = rand::rng().random_range(0..PONDERING_WORDS.len());
+                format!("＊ {}...", PONDERING_WORDS[idx]).into()
+            }
+            RunningApp::Codex => "Working".into(),
+            RunningApp::Cursor => "Thinking briefly".into(),
+        }
+    }
+
+    fn is_running(self) -> bool {
+        match self {
+            RunningApp::Codex => codex_running(),
+            RunningApp::ClaudeDesktop => {
+                scan_tool(ToolKind::Claude).is_some_and(|s| s.desktop_running)
+            }
+            RunningApp::ClaudeCode => scan_tool(ToolKind::Claude).is_some_and(|s| s.cli_running),
+            RunningApp::Cursor => scan_tool(ToolKind::Cursor).is_some_and(|s| !s.pids.is_empty()),
+        }
+    }
 }
 
-fn running_apps() -> Vec<RunningApp> {
-    let is_running =
-        |result: anyhow::Result<(Vec<u32>, usize)>| result.is_ok_and(|(pids, _)| !pids.is_empty());
+fn codex_running() -> bool {
+    crate::commands::process::find_codex_processes().is_ok_and(|(pids, _)| !pids.is_empty())
+}
 
-    let mut apps = Vec::new();
-    if is_running(crate::commands::process::find_codex_processes()) {
-        apps.push(RunningApp::Codex);
+fn scan_tool(tool: ToolKind) -> Option<ToolProcessScan> {
+    scan_non_codex_processes(tool).ok()
+}
+
+fn first_running_app() -> Option<RunningApp> {
+    if codex_running() {
+        return Some(RunningApp::Codex);
     }
-    if let Ok(claude) = crate::commands::tool_process::scan_non_codex_processes(ToolKind::Claude) {
+    if let Some(claude) = scan_tool(ToolKind::Claude) {
         if claude.desktop_running {
-            apps.push(RunningApp::ClaudeDesktop);
+            return Some(RunningApp::ClaudeDesktop);
         }
         if claude.cli_running {
-            apps.push(RunningApp::ClaudeCode);
+            return Some(RunningApp::ClaudeCode);
         }
     }
-    if is_running(crate::commands::tool_process::find_non_codex_processes(
-        ToolKind::Cursor,
-    )) {
-        apps.push(RunningApp::Cursor);
-    }
-    apps
+    scan_tool(ToolKind::Cursor)
+        .is_some_and(|s| !s.pids.is_empty())
+        .then_some(RunningApp::Cursor)
 }
 
-fn select_app(current: Option<RunningApp>, apps: &[RunningApp]) -> Option<RunningApp> {
+fn select_app(current: Option<RunningApp>) -> Option<RunningApp> {
     current
-        .filter(|app| apps.contains(app))
-        .or_else(|| apps.first().copied())
+        .filter(|app| app.is_running())
+        .or_else(first_running_app)
 }
 
 fn set_activity(
@@ -341,29 +368,20 @@ fn set_activity(
         return client.clear_activity();
     };
 
-    let mut activity = Activity::new()
-        .details(app.name())
-        .details_url(PROJECT_URL)
-        .assets(
-            Assets::new()
-                .large_image(app.logo_url())
-                .large_text(app.name())
-                .large_url(PROJECT_URL),
-        )
-        .party(Party::new().id(PARTY_ID))
-        .activity_type(ActivityType::Playing)
-        .timestamps(Timestamps::new().start(start_time));
-
-    let pondering;
-    match app {
-        RunningApp::ClaudeDesktop | RunningApp::ClaudeCode => {
-            let idx = rand::rng().random_range(0..PONDERING_WORDS.len());
-            pondering = format!("＊ {}...", PONDERING_WORDS[idx]);
-            activity = activity.state(&pondering);
-        }
-        RunningApp::Codex => activity = activity.state("Working"),
-        RunningApp::Cursor => activity = activity.state("Thinking briefly"),
-    }
-
-    client.set_activity(activity)
+    let state = app.state();
+    client.set_activity(
+        Activity::new()
+            .details(app.name())
+            .details_url(PROJECT_URL)
+            .state(state)
+            .assets(
+                Assets::new()
+                    .large_image(app.logo_url())
+                    .large_text(app.name())
+                    .large_url(PROJECT_URL),
+            )
+            .party(Party::new().id(PARTY_ID))
+            .activity_type(ActivityType::Playing)
+            .timestamps(Timestamps::new().start(start_time)),
+    )
 }

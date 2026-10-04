@@ -1,8 +1,15 @@
-import type { DesktopReopenPreference } from "@/lib/desktopReopen";
-import type { CodexClosePreference } from "@/lib/codexClosePreference";
+import {
+  parseDesktopReopenPreference,
+  type DesktopReopenPreference,
+} from "@/lib/desktopReopen";
+import {
+  parseCodexClosePreference,
+  type CodexClosePreference,
+} from "@/lib/codexClosePreference";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -23,7 +30,7 @@ interface SettingsModalProps {
   onReopenPreferenceChange: (value: DesktopReopenPreference) => void;
   closePreference: CodexClosePreference;
   onClosePreferenceChange: (value: CodexClosePreference) => void;
-  onClose: () => void;
+  onOpenChange: (open: boolean) => void;
 }
 
 export function SettingsModal({
@@ -32,10 +39,10 @@ export function SettingsModal({
   onReopenPreferenceChange,
   closePreference,
   onClosePreferenceChange,
-  onClose,
+  onOpenChange,
 }: SettingsModalProps) {
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
@@ -45,7 +52,7 @@ export function SettingsModal({
             <FieldLabel htmlFor="codex-close-preference">Codex close method</FieldLabel>
             <Select
               value={closePreference}
-              onValueChange={(value) => onClosePreferenceChange(value as CodexClosePreference)}
+              onValueChange={(value) => onClosePreferenceChange(parseCodexClosePreference(value))}
             >
               <SelectTrigger id="codex-close-preference" className="w-full">
                 <SelectValue />
@@ -64,7 +71,9 @@ export function SettingsModal({
             <FieldLabel htmlFor="desktop-reopen-preference">Reopen Codex after close</FieldLabel>
             <Select
               value={reopenPreference}
-              onValueChange={(value) => onReopenPreferenceChange(value as DesktopReopenPreference)}
+              onValueChange={(value) =>
+                onReopenPreferenceChange(parseDesktopReopenPreference(value))
+              }
             >
               <SelectTrigger id="desktop-reopen-preference" className="w-full">
                 <SelectValue />
@@ -81,9 +90,9 @@ export function SettingsModal({
           </Field>
         </FieldGroup>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Done
-          </Button>
+          <DialogClose asChild>
+            <Button variant="outline">Done</Button>
+          </DialogClose>
         </DialogFooter>
       </DialogContent>
     </Dialog>
