@@ -31,15 +31,17 @@ jobs:
           - platform: macos-latest
             target: aarch64-apple-darwin
             bundle_dir: dmg
+            pattern: "*.dmg"
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             bundle_dir: nsis
+            pattern: "*-setup.exe"
 
     runs-on: ${{ matrix.platform }}
 
     steps:
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
       - uses: actions/setup-node@v5
@@ -69,6 +71,14 @@ jobs:
           sed -i 's/Version="0.0.0.0"/Version="${{ needs.set_version.outputs.version }}.0"/' "$stage/AppxManifest.xml"
           winapp pack "$stage" --quiet
 
+      - id: installer
+        shell: bash
+        run: |
+          src="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/${{ matrix.bundle_dir }}" -maxdepth 1 -name '${{ matrix.pattern }}')"
+          file="${src/_${{ needs.set_version.outputs.version }}/}"
+          mv "$src" "$file"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.set_version.outputs.version }}
@@ -78,7 +88,7 @@ jobs:
             AI Switcher ${{ needs.set_version.outputs.version }} ${{ github.sha }}
           draft: true
           files: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/${{ matrix.bundle_dir }}/*
+            ${{ steps.installer.outputs.file }}
             *.msix
 
   release:

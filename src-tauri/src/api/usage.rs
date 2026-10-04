@@ -17,9 +17,9 @@ use crate::auth::{
     sync_active_claude_account_credentials,
 };
 use crate::types::{
-    AuthData, ClaudeCredential, CodexRateLimitResetConsumeResult,
-    CodexRateLimitResetCredits, CodexRateLimitResetOutcome, CreditStatusDetails, RateLimitDetails,
-    RateLimitStatusPayload, RateLimitWindow, ScopedLimit, StoredAccount, UsageInfo,
+    AuthData, ClaudeCredential, CodexRateLimitResetConsumeResult, CodexRateLimitResetCredits,
+    CodexRateLimitResetOutcome, CreditStatusDetails, RateLimitDetails, RateLimitStatusPayload,
+    RateLimitWindow, ScopedLimit, StoredAccount, UsageInfo,
 };
 
 const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
@@ -126,31 +126,26 @@ struct ClaudeUsageLimit {
 
 /// Get usage information for an account
 pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
-    println!("[Usage] Fetching usage for account: {}", account.name);
-
     match &account.auth_data {
-        AuthData::ApiKey { .. } => {
-            println!("[Usage] API key accounts don't support usage info");
-            Ok(UsageInfo {
-                account_id: account.id.clone(),
-                plan_type: Some("api_key".to_string()),
-                primary_used_percent: None,
-                primary_window_minutes: None,
-                primary_resets_at: None,
-                secondary_used_percent: None,
-                secondary_window_minutes: None,
-                secondary_resets_at: None,
-                scoped_limits: Vec::new(),
-                has_credits: None,
-                unlimited_credits: None,
-                credits_balance: None,
-                rate_limit_reset_available_count: None,
-                rate_limit_reset_credits: None,
-                rate_limit_reset_error: None,
-                cursor_usage: None,
-                error: Some("Usage info not available for API key accounts".to_string()),
-            })
-        }
+        AuthData::ApiKey { .. } => Ok(UsageInfo {
+            account_id: account.id.clone(),
+            plan_type: Some("api_key".to_string()),
+            primary_used_percent: None,
+            primary_window_minutes: None,
+            primary_resets_at: None,
+            secondary_used_percent: None,
+            secondary_window_minutes: None,
+            secondary_resets_at: None,
+            scoped_limits: Vec::new(),
+            has_credits: None,
+            unlimited_credits: None,
+            credits_balance: None,
+            rate_limit_reset_available_count: None,
+            rate_limit_reset_credits: None,
+            rate_limit_reset_error: None,
+            cursor_usage: None,
+            error: Some("Usage info not available for API key accounts".to_string()),
+        }),
         AuthData::ClaudeCode { .. } => get_usage_with_claude_auth(account).await,
         AuthData::ChatGPT { .. } => get_usage_with_chatgpt_auth(account).await,
         AuthData::ClaudeDesktop { .. } => get_usage_with_claude_desktop_auth(account).await,
@@ -160,11 +155,6 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
 
 /// Send a minimal authenticated request to warm up account traffic paths.
 pub async fn warmup_account(account: &StoredAccount) -> Result<()> {
-    println!(
-        "[Warmup] Sending warm-up request for account: {}",
-        account.name
-    );
-
     match &account.auth_data {
         AuthData::ApiKey { key } => warmup_with_api_key(key).await,
         AuthData::ChatGPT { .. } => warmup_with_chatgpt_auth(account).await,
@@ -266,7 +256,9 @@ pub async fn fetch_cursor_account_metadata(
         Ok(response) => parse_cursor_response_json(response)
             .await
             .ok()
-            .and_then(|usage_payload| extract_cursor_epoch_millis(&usage_payload, "billingCycleEnd"))
+            .and_then(|usage_payload| {
+                extract_cursor_epoch_millis(&usage_payload, "billingCycleEnd")
+            })
             .and_then(DateTime::from_timestamp_millis),
         Err(err) => {
             println!("[Usage] Cursor GetCurrentPeriodUsage failed: {err}");
@@ -385,11 +377,8 @@ async fn parse_usage_response(
     response: reqwest::Response,
 ) -> Result<UsageInfo> {
     let status = response.status();
-    println!("[Usage] Response status: {status}");
 
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        println!("[Usage] Error response: {body}");
         return Ok(UsageInfo::error(
             account_id.to_string(),
             format!("API error: {status}"),
@@ -400,21 +389,12 @@ async fn parse_usage_response(
         .text()
         .await
         .context("Failed to read response body")?;
-    println!(
-        "[Usage] Response body: {}",
-        &body_text[..body_text.len().min(200)]
-    );
 
     let payload: RateLimitStatusPayload =
         serde_json::from_str(&body_text).context("Failed to parse usage response")?;
 
-    println!("[Usage] Parsed plan_type: {}", payload.plan_type);
-
     let usage = convert_payload_to_usage_info(account_id, payload);
-    println!(
-        "[Usage] {} - primary: {:?}%, plan: {:?}",
-        account_name, usage.primary_used_percent, usage.plan_type
-    );
+    println!("[Usage] Refreshed account: {account_name}");
 
     Ok(usage)
 }
@@ -543,7 +523,9 @@ async fn get_usage_with_cursor_auth(account: &StoredAccount) -> Result<UsageInfo
     )
     .await;
     let plan_payload = match plan_response {
-        Ok(response) => parse_cursor_response_json(response).await.unwrap_or(json!({})),
+        Ok(response) => parse_cursor_response_json(response)
+            .await
+            .unwrap_or(json!({})),
         Err(err) => {
             println!("[Usage] Cursor GetPlanInfo failed: {err}");
             json!({})
@@ -719,7 +701,7 @@ fn build_claude_warmup_payload() -> serde_json::Value {
 
 fn build_warmup_payload(stream: bool, include_max_output_tokens: bool) -> serde_json::Value {
     let mut payload = json!({
-        "model": "gpt-5.4-mini",
+        "model": "gpt-5.6-luna",
         "instructions": "You are Codex.",
         "input": [
             {
@@ -728,7 +710,7 @@ fn build_warmup_payload(stream: bool, include_max_output_tokens: bool) -> serde_
                 "content": [
                     {
                         "type": "input_text",
-                        "text": "Hi"
+                        "text": "Thanks"
                     }
                 ]
             }
@@ -792,7 +774,6 @@ fn build_chatgpt_headers(
     }
 
     if let Some(acc_id) = chatgpt_account_id {
-        println!("[Usage] Using ChatGPT Account ID: {acc_id}");
         if let Ok(header_name) = HeaderName::from_bytes(b"chatgpt-account-id") {
             if let Ok(header_value) = HeaderValue::from_str(acc_id) {
                 headers.insert(header_name, header_value);
@@ -951,7 +932,6 @@ async fn send_chatgpt_get_request(
 ) -> Result<reqwest::Response> {
     let client = reqwest::Client::new();
     let headers = build_chatgpt_headers(access_token, chatgpt_account_id)?;
-    println!("[Usage] Requesting: {url}");
 
     client
         .get(url)
@@ -1367,7 +1347,8 @@ async fn send_cursor_request(
         .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
         .header(
             AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {access_token}")).context("Invalid Cursor access token")?,
+            HeaderValue::from_str(&format!("Bearer {access_token}"))
+                .context("Invalid Cursor access token")?,
         )
         .json(&body)
         .send()
@@ -1411,7 +1392,8 @@ fn convert_cursor_payload_to_usage_info(
     plan_payload: &Value,
 ) -> UsageInfo {
     let total_used_percent = extract_cursor_plan_usage_field(usage_payload, "totalPercentUsed");
-    let auto_composer_used_percent = extract_cursor_plan_usage_field(usage_payload, "autoPercentUsed");
+    let auto_composer_used_percent =
+        extract_cursor_plan_usage_field(usage_payload, "autoPercentUsed");
     let api_used_percent = extract_cursor_plan_usage_field(usage_payload, "apiPercentUsed");
     let resets_at_millis = extract_cursor_epoch_millis(usage_payload, "billingCycleEnd");
     let starts_at_millis = extract_cursor_epoch_millis(usage_payload, "billingCycleStart");
@@ -1490,8 +1472,6 @@ fn extract_credits(credits: Option<CreditStatusDetails>) -> Option<CreditStatusD
 
 /// Refresh all account usage
 pub async fn refresh_all_usage(accounts: &[StoredAccount]) -> Vec<UsageInfo> {
-    println!("[Usage] Refreshing usage for {} accounts", accounts.len());
-
     let concurrency = accounts.len().min(10).max(1);
     let results: Vec<UsageInfo> = stream::iter(accounts.iter().cloned())
         .map(|account| async move {
@@ -1507,7 +1487,6 @@ pub async fn refresh_all_usage(accounts: &[StoredAccount]) -> Vec<UsageInfo> {
         .collect()
         .await;
 
-    println!("[Usage] Refresh complete");
     results
 }
 

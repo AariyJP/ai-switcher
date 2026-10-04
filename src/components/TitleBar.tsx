@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "@/components/ui/button";
-import { isTauriRuntime } from "@/lib/platform";
+import { getTauriWindow } from "@/lib/tauriWindow";
 import { cn } from "@/lib/utils";
 
 const segoeGlyphStyle: React.CSSProperties = {
@@ -10,7 +9,6 @@ const segoeGlyphStyle: React.CSSProperties = {
   lineHeight: 1,
 };
 
-const appWindow = getCurrentWindow();
 const isMacOs =
   typeof navigator !== "undefined" &&
   /(Mac|iPhone|iPod|iPad)/i.test(navigator.userAgent);
@@ -19,17 +17,17 @@ export function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false);
 
   const handleDrag = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!isTauriRuntime() || event.button !== 0) return;
-    void appWindow.startDragging();
+    if (event.button !== 0) return;
+    void getTauriWindow()?.startDragging();
   }, []);
 
   const handleDoubleClick = useCallback(() => {
-    if (!isTauriRuntime()) return;
-    void appWindow.toggleMaximize();
+    void getTauriWindow()?.toggleMaximize();
   }, []);
 
   useEffect(() => {
-    if (!isTauriRuntime() || isMacOs) return;
+    const appWindow = getTauriWindow();
+    if (!appWindow || isMacOs) return;
     let unlisten: (() => void) | undefined;
 
     const sync = async () => {
@@ -70,7 +68,7 @@ export function TitleBar() {
             variant="ghost"
             size="icon"
             onClick={() => {
-              void appWindow.minimize();
+              void getTauriWindow()?.minimize();
             }}
             className="h-full w-[46px] rounded-none border-0"
             title="Minimize"
@@ -81,7 +79,7 @@ export function TitleBar() {
             variant="ghost"
             size="icon"
             onClick={() => {
-              void appWindow.toggleMaximize();
+              void getTauriWindow()?.toggleMaximize();
             }}
             className="h-full w-[46px] rounded-none border-0"
             title={isMaximized ? "Restore" : "Maximize"}
@@ -94,7 +92,7 @@ export function TitleBar() {
             variant="ghost"
             size="icon"
             onClick={() => {
-              void appWindow.close();
+              void getTauriWindow()?.close();
             }}
             className="h-full w-[46px] rounded-none border-0"
             title="Close"
