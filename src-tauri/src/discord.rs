@@ -235,9 +235,7 @@ pub fn start_discord_presence() {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    set_presence_enabled(
-        crate::auth::storage::get_discord_presence_enabled().unwrap_or(true),
-    );
+    set_presence_enabled(crate::auth::storage::get_discord_presence_enabled().unwrap_or(true));
 
     thread::spawn(move || loop {
         if !presence_enabled() {
@@ -305,9 +303,8 @@ impl RunningApp {
 }
 
 fn running_apps() -> Vec<RunningApp> {
-    let is_running = |result: anyhow::Result<(Vec<u32>, usize)>| {
-        result.is_ok_and(|(pids, _)| !pids.is_empty())
-    };
+    let is_running =
+        |result: anyhow::Result<(Vec<u32>, usize)>| result.is_ok_and(|(pids, _)| !pids.is_empty());
 
     let mut apps = Vec::new();
     if is_running(crate::commands::process::find_codex_processes()) {

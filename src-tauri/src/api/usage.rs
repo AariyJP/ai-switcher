@@ -17,9 +17,9 @@ use crate::auth::{
     sync_active_claude_account_credentials,
 };
 use crate::types::{
-    AuthData, ClaudeCredential, CodexRateLimitResetConsumeResult,
-    CodexRateLimitResetCredits, CodexRateLimitResetOutcome, CreditStatusDetails, RateLimitDetails,
-    RateLimitStatusPayload, RateLimitWindow, ScopedLimit, StoredAccount, UsageInfo,
+    AuthData, ClaudeCredential, CodexRateLimitResetConsumeResult, CodexRateLimitResetCredits,
+    CodexRateLimitResetOutcome, CreditStatusDetails, RateLimitDetails, RateLimitStatusPayload,
+    RateLimitWindow, ScopedLimit, StoredAccount, UsageInfo,
 };
 
 const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
@@ -256,7 +256,9 @@ pub async fn fetch_cursor_account_metadata(
         Ok(response) => parse_cursor_response_json(response)
             .await
             .ok()
-            .and_then(|usage_payload| extract_cursor_epoch_millis(&usage_payload, "billingCycleEnd"))
+            .and_then(|usage_payload| {
+                extract_cursor_epoch_millis(&usage_payload, "billingCycleEnd")
+            })
             .and_then(DateTime::from_timestamp_millis),
         Err(err) => {
             println!("[Usage] Cursor GetCurrentPeriodUsage failed: {err}");
@@ -521,7 +523,9 @@ async fn get_usage_with_cursor_auth(account: &StoredAccount) -> Result<UsageInfo
     )
     .await;
     let plan_payload = match plan_response {
-        Ok(response) => parse_cursor_response_json(response).await.unwrap_or(json!({})),
+        Ok(response) => parse_cursor_response_json(response)
+            .await
+            .unwrap_or(json!({})),
         Err(err) => {
             println!("[Usage] Cursor GetPlanInfo failed: {err}");
             json!({})
@@ -1343,7 +1347,8 @@ async fn send_cursor_request(
         .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
         .header(
             AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {access_token}")).context("Invalid Cursor access token")?,
+            HeaderValue::from_str(&format!("Bearer {access_token}"))
+                .context("Invalid Cursor access token")?,
         )
         .json(&body)
         .send()
@@ -1387,7 +1392,8 @@ fn convert_cursor_payload_to_usage_info(
     plan_payload: &Value,
 ) -> UsageInfo {
     let total_used_percent = extract_cursor_plan_usage_field(usage_payload, "totalPercentUsed");
-    let auto_composer_used_percent = extract_cursor_plan_usage_field(usage_payload, "autoPercentUsed");
+    let auto_composer_used_percent =
+        extract_cursor_plan_usage_field(usage_payload, "autoPercentUsed");
     let api_used_percent = extract_cursor_plan_usage_field(usage_payload, "apiPercentUsed");
     let resets_at_millis = extract_cursor_epoch_millis(usage_payload, "billingCycleEnd");
     let starts_at_millis = extract_cursor_epoch_millis(usage_payload, "billingCycleStart");

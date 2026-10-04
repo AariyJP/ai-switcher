@@ -876,11 +876,9 @@ fn validate_imported_store(store: &AccountsStore) -> anyhow::Result<()> {
     }
 
     if let Some(active_id) = &store.active_cursor_account_id {
-        if !store
-            .accounts
-            .iter()
-            .any(|a| &a.id == active_id && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor)
-        {
+        if !store.accounts.iter().any(|a| {
+            &a.id == active_id && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor
+        }) {
             anyhow::bail!("Import references a missing active Cursor account: {active_id}");
         }
     }
@@ -1014,17 +1012,19 @@ fn merge_accounts_store(
         }
     }
 
-    let current_cursor_active_is_valid = current.active_cursor_account_id.as_ref().is_some_and(|id| {
-        current
-            .accounts
-            .iter()
-            .any(|a| &a.id == id && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor)
-    });
+    let current_cursor_active_is_valid =
+        current.active_cursor_account_id.as_ref().is_some_and(|id| {
+            current.accounts.iter().any(|a| {
+                &a.id == id && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor
+            })
+        });
 
     if !current_cursor_active_is_valid {
         if let Some(imported_active) = imported_active_cursor_id {
             if current.accounts.iter().any(|a| {
-                a.id == imported_active && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor
+                a.id == imported_active
+                    && a.tool == ToolKind::Cursor
+                    && a.auth_mode == AuthMode::Cursor
             }) {
                 current.active_cursor_account_id = Some(imported_active);
             } else {
