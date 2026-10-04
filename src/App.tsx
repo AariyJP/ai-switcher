@@ -11,6 +11,7 @@ import {
   Moon,
   Plus,
   RefreshCw,
+  Settings,
   Sun,
   User,
   Zap,
@@ -18,6 +19,12 @@ import {
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { useAccounts } from "@/hooks/useAccounts";
+import { useForceCloseCodexProcesses } from "@/hooks/useForceCloseCodexProcesses";
+import { useDesktopReopen } from "@/hooks/useDesktopReopen";
+import { useCodexClosePreference } from "@/hooks/useCodexClosePreference";
+import { SettingsModal } from "@/components/SettingsModal";
+import { finishForceClose, type DesktopReopenPreference } from "@/lib/desktopReopen";
+import type { CodexClosePreference } from "@/lib/codexClosePreference";
 import { AccountCard, AddAccountModal, AppFooter } from "@/components";
 import {
   type AccountWithUsage,
@@ -31,9 +38,20 @@ import {
   exportFullBackupFile,
   importFullBackupFile,
   invokeBackend,
+  isTauriRuntime,
   setWindowTheme,
 } from "@/lib/platform";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -265,6 +283,11 @@ function App() {
   const [configModalError, setConfigModalError] = useState<string | null>(null);
   const [configCopied, setConfigCopied] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const [pendingSwitchAccountId, setPendingSwitchAccountId] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isCompletingForceClose, setIsCompletingForceClose] = useState(false);
+  const [isOpeningCodex, setIsOpeningCodex] = useState(false);
+  const forceCloseInFlightRef = useRef(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [processInfoByTool, setProcessInfoByTool] = useState<
@@ -514,7 +537,15 @@ function App() {
       (backendTarget.tool === "codex" || backendTarget.tool === "claude"
         ? latest[backendTarget.tool]
         : null);
+    if (backendTarget.tool === "codex" && !latest) {
+      toast.error("Could not check running Codex processes. Try again.");
+      return;
+    }
     if (activeProcessInfo && !activeProcessInfo.can_switch) {
+      if (backendTarget.tool === "codex") {
+        setPendingSwitchAccountId(accountId);
+        setForceCloseConfirmOpen(true);
+      }
       return;
     }
 
@@ -523,9 +554,16 @@ function App() {
       await switchAccount(accountId);
     } catch (err) {
       console.error("Failed to switch account:", err);
-      toast.error(
-        err instanceof Error ? err.message : "Failed to switch account"
-      );
+      const codexProcessInfo =
+        backendTarget.tool === "codex" ? (await checkProcesses())?.codex : null;
+      if (codexProcessInfo && !codexProcessInfo.can_switch) {
+        setPendingSwitchAccountId(accountId);
+        setForceCloseConfirmOpen(true);
+      } else {
+        toast.error(
+          err instanceof Error ? err.message : "Failed to switch account"
+        );
+      }
     } finally {
       setSwitchingId(null);
     }
@@ -598,6 +636,107 @@ function App() {
       return "Unknown error";
     }
   }, []);
+
+  const checkCodexProcesses = useCallback(
+    async () => (await checkProcesses())?.codex ?? null,
+    [checkProcesses]
+  );
+
+  const {
+    forceCloseConfirmOpen,
+    setForceCloseConfirmOpen,
+    isForceClosingCodex: isKillingCodex,
+    closeCodexProcesses,
+  } = useForceCloseCodexProcesses({
+    processCount: processInfoByTool.codex?.count ?? 0,
+    checkProcesses: checkCodexProcesses,
+    showToast: showWarmupToast,
+    formatError: formatWarmupError,
+  });
+  const isForceClosingCodex = isKillingCodex || isCompletingForceClose;
+  const desktopReopen = useDesktopReopen(forceCloseConfirmOpen);
+  const codexClose = useCodexClosePreference(forceCloseConfirmOpen);
+  const saveDesktopReopenPreference = (value: DesktopReopenPreference) => {
+    try {
+      desktopReopen.savePreference(value);
+    } catch (err) {
+      showWarmupToast(`Could not save preference: ${formatWarmupError(err)}`, true);
+    }
+  };
+  const saveCodexClosePreference = (value: CodexClosePreference) => {
+    try {
+      codexClose.savePreference(value);
+    } catch (err) {
+      showWarmupToast(`Could not save close preference: ${formatWarmupError(err)}`, true);
+    }
+  };
+
+  const handleForceCloseConfirm = async () => {
+    if (forceCloseInFlightRef.current || desktopReopen.checking) return;
+    forceCloseInFlightRef.current = true;
+    const accountId = pendingSwitchAccountId;
+    const shouldReopen = desktopReopen.available && desktopReopen.reopen;
+    setIsCompletingForceClose(true);
+    try {
+      try {
+        desktopReopen.rememberSelection();
+      } catch (err) {
+        showWarmupToast(`Could not save preference: ${formatWarmupError(err)}`, true);
+      }
+      try {
+        codexClose.rememberSelection();
+      } catch (err) {
+        showWarmupToast(`Could not save close preference: ${formatWarmupError(err)}`, true);
+      }
+      const result = await closeCodexProcesses(shouldReopen, codexClose.forceClose);
+      if (!result?.processInfo?.can_switch) return;
+
+      await finishForceClose(
+        { canSwitch: true, reopenToken: result.reopenToken },
+        accountId ? async () => {
+          setSwitchingId(accountId);
+          await switchAccount(accountId);
+          showWarmupToast(`Switched account after ${codexClose.forceClose ? "force closing" : "closing"} Codex.`);
+        } : null,
+        async (token) => {
+          try {
+            await invokeBackend("reopen_closed_codex_desktop", { token });
+            showWarmupToast(accountId ? "Account switched. Codex desktop reopened." : "Codex desktop reopened.");
+          } catch (err) {
+            showWarmupToast(`Codex closed${accountId ? " and account switched" : ""}, but reopening failed: ${formatWarmupError(err)}`, true);
+          }
+        },
+      );
+      if (shouldReopen && !result.reopenToken) {
+        showWarmupToast("No closed desktop app could be identified for reopening. Open Codex manually.", true);
+      }
+    } catch (err) {
+      console.error("Failed to switch account after closing Codex:", err);
+      showWarmupToast(`Switch failed after closing Codex: ${formatWarmupError(err)}`, true);
+    } finally {
+      setPendingSwitchAccountId(null);
+      setSwitchingId(null);
+      setIsCompletingForceClose(false);
+      forceCloseInFlightRef.current = false;
+      void checkProcesses();
+    }
+  };
+
+  const handleOpenCodexApp = async () => {
+    try {
+      setIsOpeningCodex(true);
+      await invokeBackend("open_codex_app");
+      showWarmupToast("Codex app opened.");
+      setTimeout(() => {
+        void checkProcesses();
+      }, 1500);
+    } catch (err) {
+      console.error("Failed to open Codex app:", err);
+      showWarmupToast(`Open Codex failed: ${formatWarmupError(err)}`, true);
+    } finally {
+      setIsOpeningCodex(false);
+    }
+  };
 
   const markSuccessfulWarmup = useCallback(
     (accountId: string, timestamp = Date.now(), window?: AutoWarmupWindow) => {
@@ -715,6 +854,14 @@ function App() {
     []
   );
 
+  const formatWindowDuration = (minutes: number | null | undefined): string => {
+    if (!minutes || minutes <= 0) return "";
+    if (minutes < 24 * 60) {
+      return `${Math.ceil(minutes / 60)}h`;
+    }
+    return `${Math.ceil(minutes / (24 * 60))}d`;
+  };
+
   const getAutoWarmupLabel = useCallback(
     (
       usage: UsageInfo | undefined,
@@ -727,10 +874,15 @@ function App() {
 
       const windowKind = getAutoWarmupWindowKind(usage);
       if (windowKind === "session" && isLimitFull(usage.secondary_used_percent)) {
-        return "Waiting weekly reset";
+        const weeklyDuration = formatWindowDuration(usage.secondary_window_minutes);
+        return weeklyDuration ? `Waiting ${weeklyDuration}` : "Waiting reset";
       }
-      if (windowKind === "session") return "Auto: 5h";
-      if (windowKind === "weekly") return "Auto: weekly";
+      if (windowKind === "session") {
+        return `Auto: ${formatWindowDuration(usage.primary_window_minutes) || "5h"}`;
+      }
+      if (windowKind === "weekly") {
+        return `Auto: ${formatWindowDuration(usage.secondary_window_minutes) || "7d"}`;
+      }
 
       return "Auto: on";
     },
@@ -919,6 +1071,13 @@ function App() {
 
   const activeAccount = accounts.find((a) => a.is_active);
   const otherAccounts = accounts.filter((a) => !a.is_active);
+  const pendingSwitchAccount = useMemo(
+    () => accounts.find((account) => account.id === pendingSwitchAccountId),
+    [accounts, pendingSwitchAccountId]
+  );
+  const closeConfirmLabel = pendingSwitchAccount
+    ? "Close and switch account"
+    : "Close Codex";
   const codexProcessInfo = processInfoByTool.codex;
   const claudeProcessInfo = processInfoByTool.claude;
   const hasRunningCodex = !!codexProcessInfo && codexProcessInfo.count > 0;
@@ -1088,6 +1247,33 @@ function App() {
                       {codexProcessInfo.count} Codex running
                     </Badge>
                   )}
+                  {codexProcessInfo && hasRunningCodex && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => {
+                        setPendingSwitchAccountId(null);
+                        setForceCloseConfirmOpen(true);
+                      }}
+                      disabled={isForceClosingCodex}
+                    >
+                      Close
+                    </Button>
+                  )}
+                  {activeTool === "codex" &&
+                    isTauriRuntime() &&
+                    codexProcessInfo &&
+                    !hasRunningCodex && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleOpenCodexApp}
+                        disabled={isOpeningCodex || isCompletingForceClose || switchingId !== null}
+                      >
+                        <Monitor data-icon="inline-start" />
+                        {isOpeningCodex ? "Opening..." : "Open Codex"}
+                      </Button>
+                    )}
                   {claudeProcessInfo && (
                     <Badge variant={processBadgeVariant(hasRunningClaude)}>
                       <span
@@ -1192,6 +1378,19 @@ function App() {
                     ? "Disable Discord Rich Presence"
                     : "Enable Discord Rich Presence"}
                 </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setIsSettingsOpen(true)}
+                    aria-label="Settings"
+                  >
+                    <Settings />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Settings</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1397,7 +1596,8 @@ function App() {
                   }
                   onRename={(newName) => renameAccount(activeAccount.id, newName)}
                   switching={switchingId === activeAccount.id}
-                  switchDisabled={hasRunningActiveTool}
+                  switchDisabled={hasRunningActiveTool && activeTool !== "codex"}
+                  codexRunning={activeTool === "codex" && hasRunningCodex}
                   switchDisabledLabel={switchDisabledLabel}
                   switchDisabledTooltip={switchDisabledTooltip}
                   warmingUp={
@@ -1487,7 +1687,8 @@ function App() {
                       }
                       onRename={(newName) => renameAccount(account.id, newName)}
                       switching={switchingId === account.id}
-                      switchDisabled={hasRunningActiveTool}
+                      switchDisabled={hasRunningActiveTool && activeTool !== "codex"}
+                      codexRunning={activeTool === "codex" && hasRunningCodex}
                       switchDisabledLabel={switchDisabledLabel}
                       switchDisabledTooltip={switchDisabledTooltip}
                       warmingUp={
@@ -1657,6 +1858,139 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <SettingsModal
+        open={isSettingsOpen}
+        reopenPreference={desktopReopen.preference}
+        onReopenPreferenceChange={saveDesktopReopenPreference}
+        closePreference={codexClose.preference}
+        onClosePreferenceChange={saveCodexClosePreference}
+        onClose={() => setIsSettingsOpen(false)}
+      />
+
+      <AlertDialog
+        open={forceCloseConfirmOpen}
+        onOpenChange={(open) => {
+          if (open || isForceClosingCodex) return;
+          setPendingSwitchAccountId(null);
+          setForceCloseConfirmOpen(false);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close running Codex processes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will {codexClose.forceClose ? "force close" : "gracefully close"}{" "}
+              {codexProcessInfo?.count ?? 0} Codex process
+              {(codexProcessInfo?.count ?? 0) === 1 ? "" : "es"} that currently{" "}
+              {(codexProcessInfo?.count ?? 0) === 1 ? "blocks" : "block"} account switching.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="bg-muted flex flex-col gap-2 rounded-lg border p-3">
+            {codexClose.preference !== "ask" ? (
+              <p className="text-muted-foreground text-sm">
+                Codex will {codexClose.forceClose ? "be force closed" : "close gracefully"}. You can change this in Settings.
+              </p>
+            ) : (
+              <>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={codexClose.forceClose}
+                    onChange={(event) => codexClose.setForceClose(event.target.checked)}
+                    disabled={isForceClosingCodex}
+                    className="accent-destructive size-4"
+                  />
+                  Force close Codex
+                </label>
+                <label className="text-muted-foreground flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={codexClose.remember}
+                    onChange={(event) => codexClose.setRemember(event.target.checked)}
+                    disabled={isForceClosingCodex}
+                    className="accent-primary size-4"
+                  />
+                  Remember this selection
+                </label>
+                <p className="text-muted-foreground text-xs">
+                  {codexClose.forceClose
+                    ? "Stops Codex immediately. Unsaved work may be lost."
+                    : "Asks Codex to quit normally so it can finish cleanup."}
+                </p>
+              </>
+            )}
+          </div>
+          {pendingSwitchAccount && (
+            <p className="text-muted-foreground text-sm">
+              After closing Codex, AI Switcher will switch to{" "}
+              <span className="text-foreground font-medium">{pendingSwitchAccount.name}</span>.
+            </p>
+          )}
+          <div className="bg-muted flex flex-col gap-2 rounded-lg p-3">
+            {desktopReopen.checking ? (
+              <p className="text-muted-foreground text-sm">Checking for a desktop app to reopen...</p>
+            ) : desktopReopen.available && desktopReopen.preference !== "ask" ? (
+              <p className="text-muted-foreground text-sm">
+                {desktopReopen.preference === "always"
+                  ? "Codex desktop will reopen automatically."
+                  : "Codex desktop will stay closed."}{" "}
+                You can change this in Settings.
+              </p>
+            ) : desktopReopen.available ? (
+              <>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={desktopReopen.reopen}
+                    onChange={(event) => desktopReopen.setReopen(event.target.checked)}
+                    disabled={isForceClosingCodex}
+                    className="accent-primary size-4"
+                  />
+                  Reopen Codex desktop after close
+                </label>
+                <label className="text-muted-foreground flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={desktopReopen.remember}
+                    onChange={(event) => desktopReopen.setRemember(event.target.checked)}
+                    disabled={isForceClosingCodex}
+                    className="accent-primary size-4"
+                  />
+                  Remember this selection
+                </label>
+                <p className="text-muted-foreground text-xs">
+                  You can change this later in Settings. Terminal and IDE sessions will not reopen.
+                </p>
+              </>
+            ) : (
+              <p className="text-muted-foreground text-sm">
+                No supported desktop app could be identified for reopening. Codex will only be closed.
+              </p>
+            )}
+          </div>
+          {codexClose.forceClose && (
+            <p className="text-destructive text-sm">Unsaved Codex work may be lost.</p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isForceClosingCodex}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant={codexClose.forceClose ? "destructive" : "default"}
+              disabled={isForceClosingCodex || desktopReopen.checking}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleForceCloseConfirm();
+              }}
+            >
+              {isForceClosingCodex
+                ? codexClose.forceClose
+                  ? "Force closing..."
+                  : "Closing..."
+                : closeConfirmLabel}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Toaster richColors position="bottom-center" />
     </div>

@@ -16,11 +16,11 @@ use crate::commands::{
     complete_claude_login, complete_login, consume_codex_rate_limit_reset_credit, cursor_logout,
     delete_account, export_accounts_full_encrypted_bytes, export_accounts_slim_text,
     get_account_usage_stats, get_active_account_info, get_discord_presence_enabled,
-    get_masked_account_ids, get_usage, import_accounts_full_encrypted_bytes,
+    get_codex_reopen_info, get_masked_account_ids, get_usage, import_accounts_full_encrypted_bytes,
     import_accounts_slim_text, kill_codex_processes, kill_tool_processes, list_accounts,
     open_codex_app,
     refresh_account_metadata, refresh_all_accounts_usage, rename_account,
-    set_discord_presence_enabled, set_masked_account_ids, start_claude_login, start_login,
+    reopen_closed_codex_desktop, set_discord_presence_enabled, set_masked_account_ids, start_claude_login, start_login,
     switch_account, warmup_account, warmup_all_accounts,
 };
 use crate::types::{AuthMode, ToolKind};
@@ -56,6 +56,13 @@ struct ImportSlimArgs {
 #[derive(Debug, Deserialize)]
 struct MaskedIdsArgs {
     ids: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloseCodexArgs {
+    reopen_desktop: Option<bool>,
+    force_close: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -257,7 +264,19 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             let args: CheckProcessesArgs = parse_args(payload)?;
             to_json(check_processes(args.tool).await?)
         }
-        "kill_codex_processes" => to_json(kill_codex_processes().await?),
+        "kill_codex_processes" => {
+            let args: CloseCodexArgs = parse_args(payload)?;
+            to_json(kill_codex_processes(args.reopen_desktop, args.force_close).await?)
+        }
+        "get_codex_reopen_info" => to_json(get_codex_reopen_info().await?),
+        "reopen_closed_codex_desktop" => {
+            #[derive(Debug, Deserialize)]
+            struct ReopenArgs {
+                token: String,
+            }
+            let args: ReopenArgs = parse_args(payload)?;
+            to_json(reopen_closed_codex_desktop(args.token).await?)
+        }
         "kill_tool_processes" => {
             #[derive(Debug, Deserialize)]
             struct KillToolProcessesArgs {

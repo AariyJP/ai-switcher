@@ -37,9 +37,8 @@ function formatWindowDuration(minutes: number | null | undefined): string {
 }
 
 function formatLimitLabel(minutes: number | null | undefined): string {
-  if (minutes === 5 * 60) return "5h limit";
-  if (minutes === 7 * 24 * 60) return "Weekly limit";
-  return "Usage limit";
+  const windowLabel = formatWindowDuration(minutes);
+  return windowLabel ? `${windowLabel} limit` : "Usage limit";
 }
 
 function RateLimitBar({
@@ -164,7 +163,6 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
         <RateLimitBar
           label={formatLimitLabel(usage.primary_window_minutes)}
           usedPercent={usage.primary_used_percent!}
-          windowMinutes={usage.primary_window_minutes}
           resetsAt={usage.primary_resets_at}
         />
       )}
@@ -172,7 +170,6 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
         <RateLimitBar
           label={formatLimitLabel(usage.secondary_window_minutes)}
           usedPercent={usage.secondary_used_percent!}
-          windowMinutes={usage.secondary_window_minutes}
           resetsAt={usage.secondary_resets_at}
         />
       )}

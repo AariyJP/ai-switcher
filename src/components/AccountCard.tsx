@@ -6,6 +6,7 @@ import {
   EyeOff,
   RefreshCw,
   RotateCcw,
+  TriangleAlert,
   TimerReset,
   Trash2,
   Zap,
@@ -34,6 +35,8 @@ import {
 import { AccountUsageStats } from "@/components/AccountUsageStats";
 import { UsageBar } from "@/components/UsageBar";
 
+const USAGE_STATS_OPEN_STORAGE_KEY_PREFIX = "usage-stats-open:";
+
 interface AccountCardProps {
   account: AccountWithUsage;
   onSwitch: () => void;
@@ -43,6 +46,7 @@ interface AccountCardProps {
   onRename: (newName: string) => Promise<void>;
   switching?: boolean;
   switchDisabled?: boolean;
+  codexRunning?: boolean;
   warmingUp?: boolean;
   masked?: boolean;
   usageEnabled?: boolean;
@@ -194,7 +198,6 @@ function getPlanBadgeVariant(planKey: string): PlanBadgeVariant {
 function ActiveDot() {
   return (
     <span className="relative flex size-2">
-      <span className="bg-success/75 absolute inline-flex size-2 animate-ping rounded-full" />
       <span className="bg-success relative inline-flex size-2 rounded-full" />
     </span>
   );
@@ -209,6 +212,7 @@ export function AccountCard({
   onRename,
   switching,
   switchDisabled,
+  codexRunning = false,
   warmingUp,
   masked = false,
   usageEnabled = true,
@@ -231,7 +235,34 @@ export function AccountCard({
   );
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(account.name);
+  const [statsOpen, setStatsOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return account.is_active;
+    try {
+      const stored = window.localStorage.getItem(
+        `${USAGE_STATS_OPEN_STORAGE_KEY_PREFIX}${account.id}`
+      );
+      if (stored !== null) return stored === "1";
+    } catch {
+      // Fall back to default.
+    }
+    return account.is_active;
+  });
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const toggleStatsOpen = () => {
+    setStatsOpen((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(
+          `${USAGE_STATS_OPEN_STORAGE_KEY_PREFIX}${account.id}`,
+          next ? "1" : "0"
+        );
+      } catch {
+        // Ignore storage errors; stats still toggle for the current session.
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -240,11 +271,16 @@ export function AccountCard({
     }
   }, [isEditing]);
 
+  useEffect(() => {
+    if (account.usage && !account.usage.error) {
+      setLastRefresh(new Date());
+    }
+  }, [account.usage]);
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
       await onRefresh();
-      setLastRefresh(new Date());
     } finally {
       setIsRefreshing(false);
     }
@@ -302,7 +338,8 @@ export function AccountCard({
     !(account.auth_mode === "claude_code" && planKey === "code");
   const showSubscriptionStatus =
     usageEnabled &&
-    (account.auth_mode === "chat_g_p_t" || account.auth_mode === "cursor");
+    (account.auth_mode === "chat_g_p_t" || account.auth_mode === "cursor") &&
+    planKey !== "free";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
   const resetCredits = account.usage?.rate_limit_reset_credits;
   const resetFetchError = account.usage?.rate_limit_reset_error;
@@ -467,6 +504,10 @@ export function AccountCard({
           <AccountUsageStats
             accountId={account.id}
             enabled={account.auth_mode === "chat_g_p_t"}
+            open={statsOpen}
+            onOpenChange={toggleStatsOpen}
+            usage={account.usage}
+            usageLoading={account.usageLoading}
           />
         )}
 
@@ -481,14 +522,18 @@ export function AccountCard({
                 <Button
                   onClick={onSwitch}
                   disabled={switching || switchDisabled}
+                  variant={codexRunning ? "warning" : "default"}
                   className="flex-1"
                 >
+                  {codexRunning && !switching && <TriangleAlert data-icon="inline-start" />}
                   {switching ? "Switching..." : switchDisabled ? switchDisabledLabel : "Switch"}
                 </Button>
               </TooltipTrigger>
-              {switchDisabled && (
+              {switchDisabled ? (
                 <TooltipContent>{switchDisabledTooltip}</TooltipContent>
-              )}
+              ) : codexRunning ? (
+                <TooltipContent>Close running Codex processes and switch account</TooltipContent>
+              ) : null}
             </Tooltip>
           )}
           {usageEnabled && warmupEnabled && (

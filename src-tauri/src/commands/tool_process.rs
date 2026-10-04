@@ -159,7 +159,7 @@ pub(crate) fn ensure_tool_not_running(tool: ToolKind) -> Result<(), String> {
 #[tauri::command]
 pub async fn kill_tool_processes(tool: ToolKind) -> Result<KillCodexProcessesResult, String> {
     match tool {
-        ToolKind::Codex => super::process::kill_codex_processes().await,
+        ToolKind::Codex => super::process::kill_codex_processes(None, Some(true)).await,
         ToolKind::Claude | ToolKind::Cursor => {
             tokio::task::spawn_blocking(move || kill_tool_processes_blocking(tool))
                 .await
@@ -192,6 +192,7 @@ fn kill_tool_processes_blocking(tool: ToolKind) -> Result<KillCodexProcessesResu
         targeted_count,
         killed_pids,
         failed_pids,
+        reopen_token: None,
     })
 }
 

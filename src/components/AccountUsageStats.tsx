@@ -4,6 +4,7 @@ import type {
   AccountDailyUsage,
   AccountTopInvocation,
   AccountUsageStats as AccountUsageStatsInfo,
+  UsageInfo,
 } from "@/types";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -18,12 +19,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { invokeBackend } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
-const PROFILE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
 interface AccountUsageStatsProps {
   accountId: string;
   enabled: boolean;
-  defaultOpen?: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  usage?: UsageInfo;
+  usageLoading?: boolean;
   onStatsLoaded?: (stats: AccountUsageStatsInfo | null) => void;
 }
 
@@ -375,18 +377,24 @@ function InvocationRow({ invocation }: { invocation: AccountTopInvocation }) {
 export function AccountUsageStats({
   accountId,
   enabled,
-  defaultOpen = false,
+  open,
+  onOpenChange,
+  usage,
+  usageLoading = false,
   onStatsLoaded,
 }: AccountUsageStatsProps) {
-  const [panelOpen, setPanelOpen] = useState(defaultOpen);
   const [stats, setStats] = useState<AccountUsageStatsInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const requestSeq = useRef(0);
+  const backgroundInFlight = useRef(false);
+  const lastObservedUsage = useRef<UsageInfo | undefined>(usage);
 
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async (background = false) => {
+    if (background && backgroundInFlight.current) return;
     const requestId = ++requestSeq.current;
 
     if (!enabled) {
+      if (background) return;
       const next = emptyStats(accountId, "Usage stats are available for ChatGPT accounts only.");
       setStats(next);
       onStatsLoaded?.(next);
@@ -394,21 +402,28 @@ export function AccountUsageStats({
       return;
     }
 
-    setLoading(true);
+    if (background) {
+      backgroundInFlight.current = true;
+    } else {
+      setLoading(true);
+    }
     try {
       const next = await invokeBackend<AccountUsageStatsInfo>("get_account_usage_stats", {
         accountId,
       });
       if (requestId !== requestSeq.current) return;
+      if (background && (!next.available || next.error)) return;
       setStats(next);
       onStatsLoaded?.(next);
     } catch (err) {
-      if (requestId !== requestSeq.current) return;
+      if (background || requestId !== requestSeq.current) return;
       const next = emptyStats(accountId, err instanceof Error ? err.message : String(err));
       setStats(next);
       onStatsLoaded?.(next);
     } finally {
-      if (requestId === requestSeq.current) {
+      if (background) {
+        backgroundInFlight.current = false;
+      } else if (requestId === requestSeq.current) {
         setLoading(false);
       }
     }
@@ -419,21 +434,19 @@ export function AccountUsageStats({
     setStats(null);
     onStatsLoaded?.(null);
     setLoading(false);
-    setPanelOpen(defaultOpen);
-  }, [accountId, defaultOpen, onStatsLoaded]);
+  }, [accountId, onStatsLoaded]);
 
   useEffect(() => {
-    if (!panelOpen) return;
+    if (!open) return;
     void loadStats();
-  }, [loadStats, panelOpen]);
+  }, [loadStats, open]);
 
   useEffect(() => {
-    if (!enabled || !panelOpen) return;
-    const timer = window.setInterval(() => {
-      void loadStats();
-    }, PROFILE_REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [enabled, loadStats, panelOpen]);
+    const usageChanged = usage !== lastObservedUsage.current;
+    lastObservedUsage.current = usage;
+    if (!usageChanged || !enabled || !open || usageLoading || !usage || usage.error) return;
+    void loadStats(true);
+  }, [enabled, loadStats, open, usage, usageLoading]);
 
   const currentStats = stats?.account_id === accountId ? stats : null;
   const generatedAt = currentStats ? formatGeneratedAt(currentStats.generated_at) : "";
@@ -447,8 +460,8 @@ export function AccountUsageStats({
         type="button"
         variant="ghost"
         className="h-auto w-full justify-between gap-3 px-1 py-1 text-sm font-semibold"
-        onClick={() => setPanelOpen((value) => !value)}
-        aria-expanded={panelOpen}
+        onClick={() => onOpenChange(!open)}
+        aria-expanded={open}
       >
         <span className="flex min-w-0 items-center gap-2">
           <BarChart3 className="text-muted-foreground" />
@@ -462,12 +475,12 @@ export function AccountUsageStats({
         <ChevronDown
           className={cn(
             "text-muted-foreground transition-transform",
-            panelOpen && "rotate-180"
+            open && "rotate-180"
           )}
         />
       </Button>
 
-      {panelOpen && (
+      {open && (
         <div className="pt-3">
           <div className="mb-3 flex items-center justify-between gap-3">
             <p className="text-muted-foreground truncate text-[11px]">

@@ -13,6 +13,11 @@ pub use claude::*;
 pub use claude_desktop::*;
 pub use claude_oauth::*;
 pub use cursor::*;
+
+// ponytail: refreshes are rare; one global lock keeps auth.json and accounts.json ordered.
+pub(crate) static AUTH_OPERATION_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 pub use oauth_server::*;
 pub use storage::*;
 pub use switcher::*;
