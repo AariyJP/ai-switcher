@@ -438,7 +438,7 @@ fn process_exists(pid: u32) -> bool {
 }
 
 /// Find all running codex processes. Returns (active_pids, background_count)
-fn find_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
+pub(crate) fn find_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
     #[cfg(unix)]
     {
         let mut pids = Vec::new();

@@ -62,6 +62,9 @@ struct ToolPatterns {
     windows_bundled_cli_marker: Option<&'static str>,
     #[cfg_attr(not(windows), allow(dead_code))]
     windows_bundled_cli_exe_lc: Option<&'static str>,
+    /// Windows command-line markers (lowercased) of non-CLI installs; None disables CLI detection
+    #[cfg_attr(not(windows), allow(dead_code))]
+    windows_non_cli_markers: Option<&'static [&'static str]>,
 }
 
 impl ToolKind {
@@ -83,6 +86,11 @@ impl ToolKind {
                 windows_app_server_marker: None,
                 windows_bundled_cli_marker: None,
                 windows_bundled_cli_exe_lc: None,
+                windows_non_cli_markers: Some(&[
+                    "\\anthropicclaude\\",
+                    "\\windowsapps\\",
+                    "\\claude\\claude-code\\",
+                ]),
             },
             ToolKind::Cursor => ToolPatterns {
                 cli_token: "cursor",
@@ -96,6 +104,7 @@ impl ToolKind {
                 windows_app_server_marker: None,
                 windows_bundled_cli_marker: None,
                 windows_bundled_cli_exe_lc: None,
+                windows_non_cli_markers: None,
             },
         }
     }
@@ -276,13 +285,27 @@ fn force_kill_tool_process(pid: u32) -> bool {
     false
 }
 
-fn find_non_codex_processes(tool: ToolKind) -> anyhow::Result<(Vec<u32>, usize)> {
+#[derive(Debug, Default)]
+pub(crate) struct ToolProcessScan {
+    pub pids: Vec<u32>,
+    pub background_count: usize,
+    pub desktop_running: bool,
+    pub cli_running: bool,
+}
+
+pub(crate) fn find_non_codex_processes(tool: ToolKind) -> anyhow::Result<(Vec<u32>, usize)> {
+    scan_non_codex_processes(tool).map(|scan| (scan.pids, scan.background_count))
+}
+
+pub(crate) fn scan_non_codex_processes(tool: ToolKind) -> anyhow::Result<ToolProcessScan> {
     let patterns = tool.patterns();
 
     #[cfg(unix)]
     {
         let mut pids = Vec::new();
         let mut bg_count = 0;
+        let mut desktop_running = false;
+        let mut cli_running = false;
         let process_names = read_unix_process_names();
 
         // Include TTY so we can distinguish interactive CLI sessions from
@@ -359,6 +382,11 @@ fn find_non_codex_processes(tool: ToolKind) -> anyhow::Result<(Vec<u32>, usize)>
 
                 if is_desktop || has_tty {
                     pids.push(pid);
+                    if is_desktop {
+                        desktop_running = true;
+                    } else {
+                        cli_running = true;
+                    }
                 } else {
                     // Headless or orphaned CLI processes should not block switching.
                     bg_count += 1;
@@ -369,7 +397,12 @@ fn find_non_codex_processes(tool: ToolKind) -> anyhow::Result<(Vec<u32>, usize)>
         pids.sort_unstable();
         pids.dedup();
 
-        return Ok((pids, bg_count));
+        return Ok(ToolProcessScan {
+            pids,
+            background_count: bg_count,
+            desktop_running,
+            cli_running,
+        });
     }
 
     #[cfg(windows)]
@@ -378,7 +411,7 @@ fn find_non_codex_processes(tool: ToolKind) -> anyhow::Result<(Vec<u32>, usize)>
     }
 
     #[allow(unreachable_code)]
-    Ok((Vec::new(), 0))
+    Ok(ToolProcessScan::default())
 }
 
 #[cfg(unix)]
@@ -420,7 +453,7 @@ fn is_macos_desktop_process(
 }
 
 #[cfg(windows)]
-fn find_windows_processes(patterns: ToolPatterns) -> anyhow::Result<(Vec<u32>, usize)> {
+fn find_windows_processes(patterns: ToolPatterns) -> anyhow::Result<ToolProcessScan> {
     // tasklist counts every Electron helper (`--type=gpu-process`, crashpad, renderer, etc.),
     // which inflates the badge and incorrectly blocks switching. Use PowerShell so we can inspect
     // the command line and only count live top-level app instances.
@@ -477,6 +510,7 @@ Get-CimInstance Win32_Process |
 
     let mut active_pids = Vec::new();
     let mut ignored_count = 0;
+    let mut cli_running = false;
 
     for process in processes
         .iter()
@@ -516,6 +550,12 @@ Get-CimInstance Win32_Process |
         if has_window || has_renderer || has_app_server {
             active_pids.push(process.process_id);
         } else {
+            if patterns
+                .windows_non_cli_markers
+                .is_some_and(|markers| !markers.iter().any(|marker| command.contains(marker)))
+            {
+                cli_running = true;
+            }
             // Ignore stale helper trees left behind after the window has already closed.
             ignored_count += 1;
         }
@@ -524,7 +564,12 @@ Get-CimInstance Win32_Process |
     active_pids.sort_unstable();
     active_pids.dedup();
 
-    Ok((active_pids, ignored_count))
+    Ok(ToolProcessScan {
+        desktop_running: !active_pids.is_empty(),
+        pids: active_pids,
+        background_count: ignored_count,
+        cli_running,
+    })
 }
 
 #[cfg(windows)]

@@ -1,18 +1,22 @@
 use std::{
     sync::atomic::{AtomicBool, Ordering},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use discord_rich_presence::{
-    activity::{Activity, ActivityType, Assets, Timestamps},
+    activity::{Activity, ActivityType, Assets, Party, Timestamps},
     DiscordIpc, DiscordIpcClient,
 };
 use rand::Rng;
 
+use crate::types::ToolKind;
+
 const DISCORD_CLIENT_ID: &str = "1509183960872128672";
 const PROJECT_URL: &str = "https://github.com/AariyJP/ai-switcher";
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
+const APP_CHECK_INTERVAL: Duration = Duration::from_secs(15);
+const PARTY_ID: &str = "ai-switcher";
 
 const PONDERING_WORDS: &[&str] = &[
     "Accomplishing",
@@ -243,18 +247,27 @@ pub fn start_discord_presence() {
 
         let mut client = DiscordIpcClient::new(DISCORD_CLIENT_ID);
 
-        if client.connect().is_ok() && set_activity(&mut client, start_time).is_ok() {
+        let mut app = select_app(None, &running_apps());
+        if client.connect().is_ok() && set_activity(&mut client, start_time, app).is_ok() {
+            let mut last_set = Instant::now();
             'connected: loop {
-                wait_while(presence_enabled, RECONNECT_INTERVAL);
+                wait_while(presence_enabled, APP_CHECK_INTERVAL);
 
                 if !presence_enabled() {
                     let _ = client.close();
                     break 'connected;
                 }
 
-                if set_activity(&mut client, start_time).is_err() {
+                let current = select_app(app, &running_apps());
+                if current == app && last_set.elapsed() < RECONNECT_INTERVAL {
+                    continue;
+                }
+                app = current;
+
+                if set_activity(&mut client, start_time, app).is_err() {
                     break;
                 }
+                last_set = Instant::now();
             }
         }
 
@@ -262,19 +275,98 @@ pub fn start_discord_presence() {
     });
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunningApp {
+    Codex,
+    ClaudeDesktop,
+    ClaudeCode,
+    Cursor,
+}
+
+impl RunningApp {
+    fn name(self) -> &'static str {
+        match self {
+            RunningApp::Codex => "Codex",
+            RunningApp::ClaudeDesktop => "Claude Desktop",
+            RunningApp::ClaudeCode => "Claude Code",
+            RunningApp::Cursor => "Cursor",
+        }
+    }
+
+    fn logo_url(self) -> &'static str {
+        match self {
+            RunningApp::Codex => "https://avatars.githubusercontent.com/u/14957082?v=4",
+            RunningApp::ClaudeDesktop | RunningApp::ClaudeCode => {
+                "https://claude.ai/apple-touch-icon.png"
+            }
+            RunningApp::Cursor => "https://cursor.com/apple-touch-icon.png",
+        }
+    }
+}
+
+fn running_apps() -> Vec<RunningApp> {
+    let is_running = |result: anyhow::Result<(Vec<u32>, usize)>| {
+        result.is_ok_and(|(pids, _)| !pids.is_empty())
+    };
+
+    let mut apps = Vec::new();
+    if is_running(crate::commands::process::find_codex_processes()) {
+        apps.push(RunningApp::Codex);
+    }
+    if let Ok(claude) = crate::commands::tool_process::scan_non_codex_processes(ToolKind::Claude) {
+        if claude.desktop_running {
+            apps.push(RunningApp::ClaudeDesktop);
+        }
+        if claude.cli_running {
+            apps.push(RunningApp::ClaudeCode);
+        }
+    }
+    if is_running(crate::commands::tool_process::find_non_codex_processes(
+        ToolKind::Cursor,
+    )) {
+        apps.push(RunningApp::Cursor);
+    }
+    apps
+}
+
+fn select_app(current: Option<RunningApp>, apps: &[RunningApp]) -> Option<RunningApp> {
+    current
+        .filter(|app| apps.contains(app))
+        .or_else(|| apps.first().copied())
+}
+
 fn set_activity(
     client: &mut DiscordIpcClient,
     start_time: i64,
+    app: Option<RunningApp>,
 ) -> Result<(), discord_rich_presence::error::Error> {
-    let idx = rand::rng().random_range(0..PONDERING_WORDS.len());
-    let details = format!("＊ {}...", PONDERING_WORDS[idx]);
+    let Some(app) = app else {
+        return client.clear_activity();
+    };
 
-    client.set_activity(
-        Activity::new()
-            .details(&details)
-            .details_url(PROJECT_URL)
-            .assets(Assets::new().large_url(PROJECT_URL))
-            .activity_type(ActivityType::Playing)
-            .timestamps(Timestamps::new().start(start_time)),
-    )
+    let mut activity = Activity::new()
+        .details(app.name())
+        .details_url(PROJECT_URL)
+        .assets(
+            Assets::new()
+                .large_image(app.logo_url())
+                .large_text(app.name())
+                .large_url(PROJECT_URL),
+        )
+        .party(Party::new().id(PARTY_ID))
+        .activity_type(ActivityType::Playing)
+        .timestamps(Timestamps::new().start(start_time));
+
+    let pondering;
+    match app {
+        RunningApp::ClaudeDesktop | RunningApp::ClaudeCode => {
+            let idx = rand::rng().random_range(0..PONDERING_WORDS.len());
+            pondering = format!("＊ {}...", PONDERING_WORDS[idx]);
+            activity = activity.state(&pondering);
+        }
+        RunningApp::Codex => activity = activity.state("＊ Working"),
+        RunningApp::Cursor => {}
+    }
+
+    client.set_activity(activity)
 }
