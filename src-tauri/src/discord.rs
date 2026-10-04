@@ -361,7 +361,7 @@ fn set_activity(
             pondering = format!("＊ {}...", PONDERING_WORDS[idx]);
             activity = activity.state(&pondering);
         }
-        RunningApp::Codex => activity = activity.state("＊ Working"),
+        RunningApp::Codex => activity = activity.state("Working"),
         RunningApp::Cursor => activity = activity.state("Thinking briefly"),
     }
 
