@@ -1,18 +1,24 @@
 use std::{
+    borrow::Cow,
     sync::atomic::{AtomicBool, Ordering},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use discord_rich_presence::{
-    activity::{Activity, ActivityType, Assets, Timestamps},
+    activity::{Activity, ActivityType, Assets, Party, Timestamps},
     DiscordIpc, DiscordIpcClient,
 };
 use rand::Rng;
 
+use crate::commands::tool_process::{scan_non_codex_processes, ToolProcessScan};
+use crate::types::ToolKind;
+
 const DISCORD_CLIENT_ID: &str = "1509183960872128672";
 const PROJECT_URL: &str = "https://github.com/AariyJP/ai-switcher";
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
+const APP_CHECK_INTERVAL: Duration = Duration::from_secs(15);
+const PARTY_ID: &str = "ai-switcher";
 
 const PONDERING_WORDS: &[&str] = &[
     "Accomplishing",
@@ -231,9 +237,7 @@ pub fn start_discord_presence() {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    set_presence_enabled(
-        crate::auth::storage::get_discord_presence_enabled().unwrap_or(true),
-    );
+    set_presence_enabled(crate::auth::storage::get_discord_presence_enabled().unwrap_or(true));
 
     thread::spawn(move || loop {
         if !presence_enabled() {
@@ -243,17 +247,28 @@ pub fn start_discord_presence() {
 
         let mut client = DiscordIpcClient::new(DISCORD_CLIENT_ID);
 
-        if client.connect().is_ok() && set_activity(&mut client, start_time).is_ok() {
-            'connected: loop {
-                wait_while(presence_enabled, RECONNECT_INTERVAL);
+        if client.connect().is_ok() {
+            let mut app = select_app(None);
+            if set_activity(&mut client, start_time, app).is_ok() {
+                let mut last_set = Instant::now();
+                'connected: loop {
+                    wait_while(presence_enabled, APP_CHECK_INTERVAL);
 
-                if !presence_enabled() {
-                    let _ = client.close();
-                    break 'connected;
-                }
+                    if !presence_enabled() {
+                        let _ = client.close();
+                        break 'connected;
+                    }
 
-                if set_activity(&mut client, start_time).is_err() {
-                    break;
+                    let current = select_app(app);
+                    if current == app && last_set.elapsed() < RECONNECT_INTERVAL {
+                        continue;
+                    }
+                    app = current;
+
+                    if set_activity(&mut client, start_time, app).is_err() {
+                        break;
+                    }
+                    last_set = Instant::now();
                 }
             }
         }
@@ -262,18 +277,110 @@ pub fn start_discord_presence() {
     });
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunningApp {
+    Codex,
+    ClaudeDesktop,
+    ClaudeCode,
+    Cursor,
+}
+
+impl RunningApp {
+    fn name(self) -> &'static str {
+        match self {
+            RunningApp::Codex => "Codex",
+            RunningApp::ClaudeDesktop => "Claude Desktop",
+            RunningApp::ClaudeCode => "Claude Code",
+            RunningApp::Cursor => "Cursor",
+        }
+    }
+
+    fn logo_url(self) -> &'static str {
+        match self {
+            RunningApp::Codex => "https://avatars.githubusercontent.com/u/14957082?v=4",
+            RunningApp::ClaudeDesktop | RunningApp::ClaudeCode => {
+                "https://claude.ai/apple-touch-icon.png"
+            }
+            RunningApp::Cursor => "https://cursor.com/apple-touch-icon.png",
+        }
+    }
+
+    fn state(self) -> Cow<'static, str> {
+        match self {
+            RunningApp::ClaudeDesktop | RunningApp::ClaudeCode => {
+                let idx = rand::rng().random_range(0..PONDERING_WORDS.len());
+                format!("＊ {}...", PONDERING_WORDS[idx]).into()
+            }
+            RunningApp::Codex => "Working".into(),
+            RunningApp::Cursor => "Thinking briefly".into(),
+        }
+    }
+
+    fn is_running(self) -> bool {
+        match self {
+            RunningApp::Codex => codex_running(),
+            RunningApp::ClaudeDesktop => {
+                scan_tool(ToolKind::Claude).is_some_and(|s| s.desktop_running)
+            }
+            RunningApp::ClaudeCode => scan_tool(ToolKind::Claude).is_some_and(|s| s.cli_running),
+            RunningApp::Cursor => scan_tool(ToolKind::Cursor).is_some_and(|s| !s.pids.is_empty()),
+        }
+    }
+}
+
+fn codex_running() -> bool {
+    crate::commands::process::find_codex_processes().is_ok_and(|(pids, _)| !pids.is_empty())
+}
+
+fn scan_tool(tool: ToolKind) -> Option<ToolProcessScan> {
+    scan_non_codex_processes(tool).ok()
+}
+
+fn first_running_app() -> Option<RunningApp> {
+    if codex_running() {
+        return Some(RunningApp::Codex);
+    }
+    if let Some(claude) = scan_tool(ToolKind::Claude) {
+        if claude.desktop_running {
+            return Some(RunningApp::ClaudeDesktop);
+        }
+        if claude.cli_running {
+            return Some(RunningApp::ClaudeCode);
+        }
+    }
+    scan_tool(ToolKind::Cursor)
+        .is_some_and(|s| !s.pids.is_empty())
+        .then_some(RunningApp::Cursor)
+}
+
+fn select_app(current: Option<RunningApp>) -> Option<RunningApp> {
+    current
+        .filter(|app| app.is_running())
+        .or_else(first_running_app)
+}
+
 fn set_activity(
     client: &mut DiscordIpcClient,
     start_time: i64,
+    app: Option<RunningApp>,
 ) -> Result<(), discord_rich_presence::error::Error> {
-    let idx = rand::rng().random_range(0..PONDERING_WORDS.len());
-    let details = format!("＊ {}...", PONDERING_WORDS[idx]);
+    let Some(app) = app else {
+        return client.clear_activity();
+    };
 
+    let state = app.state();
     client.set_activity(
         Activity::new()
-            .details(&details)
+            .details(app.name())
             .details_url(PROJECT_URL)
-            .assets(Assets::new().large_url(PROJECT_URL))
+            .state(state)
+            .assets(
+                Assets::new()
+                    .large_image(app.logo_url())
+                    .large_text(app.name())
+                    .large_url(PROJECT_URL),
+            )
+            .party(Party::new().id(PARTY_ID))
             .activity_type(ActivityType::Playing)
             .timestamps(Timestamps::new().start(start_time)),
     )

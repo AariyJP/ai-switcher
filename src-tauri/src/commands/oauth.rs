@@ -10,7 +10,7 @@ use crate::auth::claude_oauth::{
 use crate::auth::oauth_server::{start_oauth_login, wait_for_oauth_login, OAuthLoginResult};
 use crate::auth::{
     add_account, load_accounts, set_active_account, switch_to_account, switch_to_claude_account,
-    touch_account,
+    touch_account, AUTH_OPERATION_LOCK,
 };
 use crate::types::{AccountInfo, OAuthLoginInfo, ToolKind};
 
@@ -65,6 +65,8 @@ pub async fn complete_login() -> Result<AccountInfo, String> {
     let account = wait_for_oauth_login(pending.rx)
         .await
         .map_err(|e| e.to_string())?;
+
+    let _auth_guard = AUTH_OPERATION_LOCK.lock().await;
 
     // Add the account to storage
     let stored = add_account(account).map_err(|e| e.to_string())?;

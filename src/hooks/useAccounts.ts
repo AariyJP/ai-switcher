@@ -16,6 +16,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const accountsRef = useRef<AccountWithUsage[]>([]);
+  const metadataRefreshInFlightRef = useRef(new Set<string>());
   const maxConcurrentUsageRequests = 10;
 
   useEffect(() => {
@@ -102,37 +103,71 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     }
   }, [tool, authMode]);
 
+  const refreshMetadata = useCallback(
+    async (
+      accountList?: AccountInfo[] | AccountWithUsage[]
+    ) => {
+      if (!(tool === "codex" || authMode === "claude_desktop" || tool === "cursor")) {
+        return;
+      }
+      const list = accountList ?? accountsRef.current;
+      const dueAccounts = list.filter(
+        (account) => !metadataRefreshInFlightRef.current.has(account.id)
+      );
+
+      // Mark attempts before starting requests so overlapping refresh cycles
+      // cannot issue duplicate metadata calls for the same account.
+      dueAccounts.forEach((account) => {
+        metadataRefreshInFlightRef.current.add(account.id);
+      });
+
+      await runWithConcurrency(
+        dueAccounts,
+        async (account) => {
+          try {
+            const metadata = await invokeBackend<AccountInfo>("refresh_account_metadata", {
+              accountId: account.id,
+            });
+            setAccounts((prev) =>
+              prev.map((item) =>
+                item.id === account.id
+                  ? {
+                      ...item,
+                      email: metadata.email,
+                      plan_type: metadata.plan_type,
+                      subscription_expires_at: metadata.subscription_expires_at,
+                    }
+                  : item
+              )
+            );
+          } catch (err) {
+            console.warn("Failed to refresh account metadata:", err);
+          } finally {
+            metadataRefreshInFlightRef.current.delete(account.id);
+          }
+        },
+        maxConcurrentUsageRequests
+      );
+    },
+    [authMode, maxConcurrentUsageRequests, runWithConcurrency, tool]
+  );
+
   const refreshUsage = useCallback(
     async (
       accountList?: AccountInfo[] | AccountWithUsage[],
       options?: { refreshMetadata?: boolean }
     ) => {
       try {
-        let list = accountList ?? accountsRef.current;
+        const list = accountList ?? accountsRef.current;
         if (list.length === 0) {
           return;
         }
 
-        if (
-          options?.refreshMetadata &&
-          (tool === "codex" || authMode === "claude_desktop" || tool === "cursor")
-        ) {
-          await runWithConcurrency(
-            list,
-            async (account) => {
-              try {
-                await invokeBackend<AccountInfo>("refresh_account_metadata", {
-                  accountId: account.id,
-                });
-              } catch (err) {
-                console.warn("Failed to refresh account metadata:", err);
-              }
-            },
-            maxConcurrentUsageRequests
-          );
-
-          list = await loadAccounts(true);
-        }
+        // Explicit refreshes include metadata, but run it beside usage so a
+        // slow accounts endpoint never delays healthy rate-limit updates.
+        const metadataPromise = options?.refreshMetadata
+          ? refreshMetadata(list)
+          : Promise.resolve();
 
         const accountIds = list.map((account) => account.id);
         const accountIdSet = new Set(accountIds);
@@ -177,12 +212,19 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
             };
           })
         );
+
+        await metadataPromise;
       } catch (err) {
         console.error("Failed to refresh usage:", err);
         throw err;
       }
     },
-    [buildUsageError, loadAccounts, maxConcurrentUsageRequests, runWithConcurrency, tool, authMode]
+    [
+      buildUsageError,
+      maxConcurrentUsageRequests,
+      refreshMetadata,
+      runWithConcurrency,
+    ]
   );
 
   const refreshSingleUsage = useCallback(async (
@@ -190,17 +232,10 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     options?: { refreshMetadata?: boolean }
   ) => {
     try {
-      if (
-        options?.refreshMetadata &&
-        (tool === "codex" || authMode === "claude_desktop" || tool === "cursor")
-      ) {
-        try {
-          await invokeBackend<AccountInfo>("refresh_account_metadata", { accountId });
-        } catch (err) {
-          console.warn("Failed to refresh account metadata:", err);
-        }
-        await loadAccounts(true);
-      }
+      const account = accountsRef.current.find((item) => item.id === accountId);
+      const metadataPromise = options?.refreshMetadata && account
+        ? refreshMetadata([account])
+        : Promise.resolve();
 
       setAccounts((prev) =>
         prev.map((a) =>
@@ -214,6 +249,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
           a.id === accountId ? { ...a, usage, usageLoading: false } : a
         )
       );
+      await metadataPromise;
       return usage;
     } catch (err) {
       console.error("Failed to refresh single usage:", err);
@@ -230,7 +266,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
       );
       throw err;
     }
-  }, [buildUsageError, loadAccounts, tool, authMode]);
+  }, [buildUsageError, refreshMetadata]);
 
   const warmupAccount = useCallback(async (accountId: string) => {
     try {
@@ -285,7 +321,9 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
       try {
         await invokeBackend("delete_account", { accountId });
         usageCacheRef.current.delete(accountId);
-        await loadAccounts();
+        // Account activation can change while deletion is in flight. Re-read
+        // backend metadata without discarding the latest cached usage.
+        await loadAccounts(true);
       } catch (err) {
         throw err;
       }
@@ -541,6 +579,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
         return;
       }
       fetchedToolsRef.current.add(toolKey);
+      void refreshMetadata(accountList);
       void refreshUsage(accountList).catch((err) => {
         if (cancelled) {
           return;
@@ -551,7 +590,7 @@ export function useAccounts(tool: ToolKind = "codex", authMode?: AuthMode) {
     return () => {
       cancelled = true;
     };
-  }, [loadAccounts, refreshUsage, toolKey]);
+  }, [loadAccounts, refreshMetadata, refreshUsage, toolKey]);
 
   return {
     accounts,

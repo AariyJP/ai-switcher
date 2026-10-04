@@ -3,12 +3,13 @@
 use super::tool_process::{check_processes, ensure_tool_not_running};
 use crate::api::usage::fetch_cursor_account_metadata;
 use crate::auth::{
-    add_account, create_chatgpt_account_from_refresh_token, import_current_claude_account,
-    import_current_claude_desktop_account, import_current_cursor_account, import_from_auth_json,
-    import_from_auth_json_contents, load_accounts, logout_claude_code, logout_claude_desktop,
-    logout_codex, logout_cursor, remove_account, save_accounts, set_active_account,
-    switch_to_account, switch_to_claude_account, switch_to_claude_desktop_account,
-    switch_to_cursor_account, touch_account,
+    add_account, create_chatgpt_account_from_refresh_token, ensure_chatgpt_tokens_fresh_locked,
+    import_current_claude_account, import_current_claude_desktop_account,
+    import_current_cursor_account, import_from_auth_json, import_from_auth_json_contents,
+    load_accounts, logout_claude_code, logout_claude_desktop, logout_codex, logout_cursor,
+    read_current_auth, remove_account, save_accounts, set_active_account, switch_to_account,
+    switch_to_claude_account, switch_to_claude_desktop_account, switch_to_cursor_account,
+    sync_active_account_tokens, touch_account, AUTH_OPERATION_LOCK,
 };
 use crate::types::{
     AccountInfo, AccountsStore, AuthData, AuthMode, ImportAccountsSummary, StoredAccount, ToolKind,
@@ -88,7 +89,9 @@ pub async fn list_accounts(
         .filter(|a| a.tool == tool && auth_mode.map_or(true, |m| a.auth_mode == m))
         .map(|a| {
             let active_id = store.active_account_id_for_mode(a.tool, a.auth_mode);
-            AccountInfo::from_stored(a, active_id)
+            let mut info = AccountInfo::from_stored(a, active_id);
+            super::usage::apply_cached_account_metadata(&mut info);
+            info
         })
         .collect();
 
@@ -114,7 +117,9 @@ pub async fn get_active_account_info(
                 && a.tool == tool
                 && auth_mode.map_or(true, |mode| a.auth_mode == mode)
         }) {
-            Ok(Some(AccountInfo::from_stored(active, Some(active_id))))
+            let mut info = AccountInfo::from_stored(active, Some(active_id));
+            super::usage::apply_cached_account_metadata(&mut info);
+            Ok(Some(info))
         } else {
             Ok(None)
         }
@@ -199,40 +204,61 @@ pub async fn add_cursor_account_from_current(name: String) -> Result<AccountInfo
 /// Switch to a different account
 #[tauri::command]
 pub async fn switch_account(account_id: String) -> Result<(), String> {
-    let store = load_accounts().map_err(|e| e.to_string())?;
+    switch_account_by_id(&account_id).await
+}
 
-    // Find the account
-    let account = store
+pub async fn switch_account_by_id(account_id: &str) -> Result<(), String> {
+    let _auth_guard = AUTH_OPERATION_LOCK.lock().await;
+    let mut store = load_accounts().map_err(|e| e.to_string())?;
+
+    let target_index = store
         .accounts
         .iter()
-        .find(|a| a.id == account_id)
+        .position(|account| account.id == account_id)
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
-    let tool = account.tool;
+    let tool = store.accounts[target_index].tool;
+
+    if tool == ToolKind::Codex && store.active_account_id.as_deref() == Some(account_id) {
+        return Ok(());
+    }
 
     ensure_tool_not_running(tool)?;
 
+    let account = store.accounts[target_index].clone();
     match &account.auth_data {
         AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => {
+            // ChatGPT rotates single-use refresh tokens. Preserve the latest token
+            // before replacing auth.json, otherwise switching back restores a stale one.
+            if let Some(auth) = read_current_auth().map_err(|e| e.to_string())? {
+                if sync_active_account_tokens(&mut store, &auth) {
+                    save_accounts(&store).map_err(|e| e.to_string())?;
+                }
+            }
+
+            let account = ensure_chatgpt_tokens_fresh_locked(&account)
+                .await
+                .map_err(|e| e.to_string())?;
+
             // Write to ~/.codex/auth.json
-            switch_to_account(account).map_err(|e| e.to_string())?;
+            switch_to_account(&account).map_err(|e| e.to_string())?;
         }
         AuthData::ClaudeCode { .. } => {
-            switch_to_claude_account(account).map_err(|e| e.to_string())?;
+            switch_to_claude_account(&account).map_err(|e| e.to_string())?;
         }
         AuthData::ClaudeDesktop { .. } => {
-            switch_to_claude_desktop_account(account).map_err(|e| e.to_string())?;
+            switch_to_claude_desktop_account(&account).map_err(|e| e.to_string())?;
         }
         AuthData::Cursor { .. } => {
-            switch_to_cursor_account(account).map_err(|e| e.to_string())?;
+            switch_to_cursor_account(&account).map_err(|e| e.to_string())?;
         }
     }
 
     // Update the active account in our store
-    set_active_account(&account_id).map_err(|e| e.to_string())?;
+    set_active_account(account_id).map_err(|e| e.to_string())?;
 
     // Update last_used_at
-    touch_account(&account_id).map_err(|e| e.to_string())?;
+    touch_account(account_id).map_err(|e| e.to_string())?;
 
     // Restart Antigravity background process if it is running
     // This allows it to pick up the new authorization file seamlessly
@@ -845,11 +871,9 @@ fn validate_imported_store(store: &AccountsStore) -> anyhow::Result<()> {
     }
 
     if let Some(active_id) = &store.active_cursor_account_id {
-        if !store
-            .accounts
-            .iter()
-            .any(|a| &a.id == active_id && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor)
-        {
+        if !store.accounts.iter().any(|a| {
+            &a.id == active_id && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor
+        }) {
             anyhow::bail!("Import references a missing active Cursor account: {active_id}");
         }
     }
@@ -983,17 +1007,19 @@ fn merge_accounts_store(
         }
     }
 
-    let current_cursor_active_is_valid = current.active_cursor_account_id.as_ref().is_some_and(|id| {
-        current
-            .accounts
-            .iter()
-            .any(|a| &a.id == id && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor)
-    });
+    let current_cursor_active_is_valid =
+        current.active_cursor_account_id.as_ref().is_some_and(|id| {
+            current.accounts.iter().any(|a| {
+                &a.id == id && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor
+            })
+        });
 
     if !current_cursor_active_is_valid {
         if let Some(imported_active) = imported_active_cursor_id {
             if current.accounts.iter().any(|a| {
-                a.id == imported_active && a.tool == ToolKind::Cursor && a.auth_mode == AuthMode::Cursor
+                a.id == imported_active
+                    && a.tool == ToolKind::Cursor
+                    && a.auth_mode == AuthMode::Cursor
             }) {
                 current.active_cursor_account_id = Some(imported_active);
             } else {

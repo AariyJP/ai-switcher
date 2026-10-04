@@ -19,8 +19,7 @@ use commands::{
     get_account_usage_stats, get_active_account_info, get_discord_presence_enabled,
     get_masked_account_ids, get_usage, import_accounts_full_encrypted_file,
     import_accounts_slim_text, kill_codex_processes, kill_tool_processes, list_accounts,
-    open_codex_app,
-    refresh_account_metadata, refresh_all_accounts_usage, rename_account,
+    open_codex_app, refresh_account_metadata, refresh_all_accounts_usage, rename_account,
     set_discord_presence_enabled, set_masked_account_ids, set_window_theme, start_claude_login,
     start_login, switch_account, warmup_account, warmup_all_accounts,
 };
@@ -42,6 +41,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_codex_reopen_info,
+            commands::reopen_closed_codex_desktop,
             // Account management
             list_accounts,
             get_active_account_info,
