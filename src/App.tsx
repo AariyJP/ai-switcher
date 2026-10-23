@@ -41,6 +41,7 @@ import {
   isTauriRuntime,
   setWindowTheme,
 } from "@/lib/platform";
+import { getTauriWindow } from "@/lib/tauriWindow";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -123,6 +124,10 @@ type AutoWarmupLedger = Record<
     lastAutoWindowKind?: AutoWarmupWindowKind;
   }
 >;
+
+const isMacOs =
+  typeof navigator !== "undefined" &&
+  /(Mac|iPhone|iPod|iPad)/i.test(navigator.userAgent);
 
 const resolveThemeDark = (themeMode: ThemeMode, prefersDark: boolean) =>
   themeMode === "dark" || (themeMode === "system" && prefersDark);
@@ -441,6 +446,19 @@ function App() {
     }
   }, [autoWarmupAccountIds]);
 
+  const handleTitlebarDrag = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!isTauriRuntime() || event.button !== 0) return;
+      void getTauriWindow()?.startDragging();
+    },
+    []
+  );
+
+  const handleTitlebarDoubleClick = useCallback(() => {
+    if (!isTauriRuntime()) return;
+    void getTauriWindow()?.toggleMaximize();
+  }, []);
+
   const toggleMask = (accountId: string) => {
     setMaskedAccounts((prev) => {
       const next = new Set(prev);
@@ -517,7 +535,7 @@ function App() {
     const apply = () => {
       const isDark = resolveThemeDark(themeMode, !!mq?.matches);
       document.documentElement.classList.toggle("dark", isDark);
-      void setWindowTheme(isDark ? "dark" : "light");
+      void setWindowTheme(isDark ? "dark" : "light", themeMode === "system");
     };
     apply();
     try {
@@ -1237,6 +1255,15 @@ function App() {
   return (
     <div className="bg-background text-foreground min-h-screen">
       <header className="bg-background sticky top-0 z-40 border-b">
+        {isTauriRuntime() && isMacOs && (
+          <div className="flex h-9 items-center px-3">
+            <div
+              onMouseDown={handleTitlebarDrag}
+              onDoubleClick={handleTitlebarDoubleClick}
+              className="h-full flex-1 select-none cursor-default ml-18 mr-2"
+            />
+          </div>
+        )}
 
         <div className="mx-auto max-w-5xl px-6 py-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_max-content] md:items-center md:gap-4">
