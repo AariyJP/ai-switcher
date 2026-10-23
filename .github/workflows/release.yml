@@ -18,7 +18,7 @@ jobs:
     outputs:
       version: ${{ steps.set_version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - id: set_version
         run: |
           VERSION="$(git log -1 --format=%s | tr -d '[:space:]')"
@@ -42,11 +42,11 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           version: 11
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: pnpm
@@ -59,10 +59,10 @@ jobs:
           shared-key: ${{ matrix.target }}
       - run: pnpm i --frozen-lockfile --prefer-offline
       - run: pnpm version:bump "${{ needs.set_version.outputs.version }}"
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         with:
           args: --target ${{ matrix.target }}
-      - uses: microsoft/setup-WinAppCli@v0.1
+      - uses: microsoft/setup-WinAppCli@v0.2
         if: runner.os == 'Windows'
       - if: runner.os == 'Windows'
         shell: bash
@@ -81,7 +81,7 @@ jobs:
           mv "$src" "$file"
           echo "file=$file" >> "$GITHUB_OUTPUT"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.set_version.outputs.version }}
           target_commitish: ${{ github.sha }}
@@ -97,7 +97,7 @@ jobs:
     needs: [set_version, build]
     runs-on: ubuntu-slim
     steps:
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.set_version.outputs.version }}
           draft: false
