@@ -701,7 +701,7 @@ fn build_claude_warmup_payload() -> serde_json::Value {
 
 fn build_warmup_payload(stream: bool, include_max_output_tokens: bool) -> serde_json::Value {
     let mut payload = json!({
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-luna",
         "instructions": "You are Codex.",
         "input": [
             {

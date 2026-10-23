@@ -1,7 +1,11 @@
 //! Window decoration commands
 
 #[tauri::command]
-pub fn set_window_theme(window: tauri::Window, dark: bool) -> Result<(), String> {
+pub fn set_window_theme(
+    window: tauri::Window,
+    dark: bool,
+    follow_system: Option<bool>,
+) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::mem::size_of;
@@ -28,8 +32,22 @@ pub fn set_window_theme(window: tauri::Window, dark: bool) -> Result<(), String>
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let theme = if follow_system.unwrap_or(false) {
+            None
+        } else if dark {
+            Some(tauri::Theme::Dark)
+        } else {
+            Some(tauri::Theme::Light)
+        };
+        window.set_theme(theme).map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     let _ = (window, dark);
+
+    let _ = follow_system;
 
     Ok(())
 }
