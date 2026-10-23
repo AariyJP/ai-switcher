@@ -6,14 +6,11 @@ on:
       source_branch:
         required: true
         default: develop
-        type: choice
-        options:
-          - develop
       version:
         required: true
 
 concurrency:
-  group: ${{ github.ref }}
+  group: create-release-commit
   cancel-in-progress: true
 
 permissions:
