@@ -46,9 +46,28 @@ fn decrypt_cursor_safe_storage(encrypted_b64: &str) -> Result<String> {
     String::from_utf8(plaintext).context("Decrypted Cursor token is not valid UTF-8")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn decrypt_cursor_safe_storage(encrypted_b64: &str) -> Result<String> {
+    use crate::auth::claude_desktop::{decrypt_v10_aes_gcm, master_key_from_local_state};
+    use base64::Engine;
+
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encrypted_b64.as_bytes())
+        .context("Failed to base64-decode Cursor token")?;
+    let appdata = std::env::var_os("APPDATA").context("APPDATA env var not set")?;
+    let key = master_key_from_local_state(
+        &std::path::PathBuf::from(appdata)
+            .join("Cursor")
+            .join("Local State"),
+    )?;
+    let plaintext =
+        decrypt_v10_aes_gcm(&raw, &key).context("Unsupported or malformed Cursor token")?;
+    String::from_utf8(plaintext).context("Decrypted Cursor token is not valid UTF-8")
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn decrypt_cursor_safe_storage(_encrypted_b64: &str) -> Result<String> {
-    anyhow::bail!("Encrypted Cursor tokens are only supported on macOS")
+    anyhow::bail!("Encrypted Cursor tokens are only supported on macOS and Windows")
 }
 
 pub fn import_current_cursor_account(account_name: String) -> Result<StoredAccount> {

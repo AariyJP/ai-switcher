@@ -768,26 +768,32 @@ fn encrypt_cookie_value(host_key: &str, value: &str) -> Result<Vec<u8>> {
 
 #[cfg(windows)]
 fn decrypt_token_cache(encrypted_b64: &str) -> Result<String> {
-    use aes_gcm::aead::{Aead, KeyInit};
-    use aes_gcm::{Aes256Gcm, Key, Nonce};
     use base64::Engine;
 
     let raw = base64::engine::general_purpose::STANDARD
         .decode(encrypted_b64.as_bytes())
         .context("Failed to base64-decode oauth:tokenCache")?;
+    let plaintext = decrypt_v10_aes_gcm(&raw, &master_key_windows()?)
+        .context("Unsupported or malformed oauth:tokenCache blob")?;
+    String::from_utf8(plaintext).context("Decrypted oauth:tokenCache is not valid UTF-8")
+}
+
+#[cfg(windows)]
+pub(crate) fn decrypt_v10_aes_gcm(raw: &[u8], key_bytes: &[u8]) -> Result<Vec<u8>> {
+    use aes_gcm::aead::{Aead, KeyInit};
+    use aes_gcm::{Aes256Gcm, Key, Nonce};
+
     let header_len = V10_PREFIX.len() + AES_GCM_NONCE_LEN + AES_GCM_TAG_LEN;
     if raw.len() < header_len || &raw[0..V10_PREFIX.len()] != V10_PREFIX {
-        anyhow::bail!("Unsupported or malformed oauth:tokenCache blob");
+        anyhow::bail!("Unsupported or malformed v10 blob");
     }
     let nonce = &raw[V10_PREFIX.len()..V10_PREFIX.len() + AES_GCM_NONCE_LEN];
     let ciphertext = &raw[V10_PREFIX.len() + AES_GCM_NONCE_LEN..];
 
-    let key_bytes = master_key_windows()?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
-    let plaintext = cipher
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key_bytes));
+    cipher
         .decrypt(Nonce::from_slice(nonce), ciphertext)
-        .map_err(|e| anyhow::anyhow!("AES-GCM decrypt failed: {e}"))?;
-    String::from_utf8(plaintext).context("Decrypted oauth:tokenCache is not valid UTF-8")
+        .map_err(|e| anyhow::anyhow!("AES-GCM decrypt failed: {e}"))
 }
 
 #[cfg(windows)]
@@ -812,8 +818,12 @@ fn encrypt_token_cache(plaintext: &str) -> Result<String> {
 
 #[cfg(windows)]
 fn master_key_windows() -> Result<Vec<u8>> {
+    master_key_from_local_state(&local_state_path()?)
+}
+
+#[cfg(windows)]
+pub(crate) fn master_key_from_local_state(path: &std::path::Path) -> Result<Vec<u8>> {
     use base64::Engine;
-    let path = local_state_path()?;
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
     let value: Value = serde_json::from_str(&content)
