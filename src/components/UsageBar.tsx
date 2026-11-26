@@ -1,5 +1,6 @@
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatUsageError } from "@/lib/usageError";
 import { cn } from "@/lib/utils";
 import type { UsageInfo } from "@/types";
 
@@ -103,8 +104,12 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
   }
 
   if (usage.error) {
+    const { title, message } = formatUsageError(usage.error);
     return (
-      <div className="text-muted-foreground py-1 text-xs italic">{usage.error}</div>
+      <div className="text-muted-foreground py-1 text-xs" role="status">
+        <div className="text-foreground font-medium">{title}</div>
+        <div>{message}</div>
+      </div>
     );
   }
 

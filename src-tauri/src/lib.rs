@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod auto_warmup;
 pub mod commands;
 pub mod types;
 pub mod web;
@@ -13,15 +14,18 @@ use tauri::Manager;
 use commands::{
     add_account_from_file, add_claude_account_from_current,
     add_claude_desktop_account_from_current, add_cursor_account_from_current, cancel_claude_login,
-    cancel_login, check_processes, claude_code_logout, claude_desktop_logout, codex_logout,
-    complete_claude_login, complete_login, consume_codex_rate_limit_reset_credit, cursor_logout,
-    delete_account, export_accounts_full_encrypted_file, export_accounts_slim_text,
+    cancel_codex_session_recovery, cancel_login, check_processes, claude_code_logout,
+    claude_desktop_logout, codex_logout, complete_claude_login, complete_login,
+    consume_codex_rate_limit_reset_credit, cursor_logout, delete_account,
+    export_accounts_full_encrypted_file, export_accounts_slim_text, get_account_reset_credits,
     get_account_usage_stats, get_active_account_info, get_discord_presence_enabled,
     get_masked_account_ids, get_usage, import_accounts_full_encrypted_file,
     import_accounts_slim_text, kill_codex_processes, kill_tool_processes, list_accounts,
-    open_codex_app, refresh_account_metadata, refresh_all_accounts_usage, rename_account,
-    set_discord_presence_enabled, set_masked_account_ids, set_window_theme, start_claude_login,
-    start_login, switch_account, warmup_account, warmup_all_accounts,
+    open_codex_app, open_codex_recovery_conversation, prepare_codex_session_recovery,
+    refresh_account_metadata, refresh_all_accounts_usage, rename_account,
+    resume_codex_session_recovery, set_auto_warmup_config, set_discord_presence_enabled,
+    set_masked_account_ids, set_window_theme, start_claude_login, start_login, switch_account,
+    warmup_account, warmup_all_accounts,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -36,8 +40,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
-        .setup(|_| {
+        .setup(|app| {
             discord::start_discord_presence();
+            #[cfg(desktop)]
+            auto_warmup::spawn_scheduler(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -74,15 +80,21 @@ pub fn run() {
             // Usage
             get_account_usage_stats,
             get_usage,
+            get_account_reset_credits,
             refresh_account_metadata,
             refresh_all_accounts_usage,
             consume_codex_rate_limit_reset_credit,
             warmup_account,
             warmup_all_accounts,
+            set_auto_warmup_config,
             // Process detection
             check_processes,
             kill_codex_processes,
             kill_tool_processes,
+            prepare_codex_session_recovery,
+            cancel_codex_session_recovery,
+            resume_codex_session_recovery,
+            open_codex_recovery_conversation,
             open_codex_app,
             // Window
             set_window_theme,

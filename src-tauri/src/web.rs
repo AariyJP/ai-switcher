@@ -12,14 +12,16 @@ use tokio::runtime::Runtime;
 use crate::commands::{
     add_account_from_auth_json_text, add_account_from_file, add_claude_account_from_current,
     add_claude_desktop_account_from_current, add_cursor_account_from_current, cancel_claude_login,
-    cancel_login, check_processes, claude_code_logout, claude_desktop_logout, codex_logout,
-    complete_claude_login, complete_login, consume_codex_rate_limit_reset_credit, cursor_logout,
-    delete_account, export_accounts_full_encrypted_bytes, export_accounts_slim_text,
+    cancel_codex_session_recovery, cancel_login, check_processes, claude_code_logout,
+    claude_desktop_logout, codex_logout, complete_claude_login, complete_login,
+    consume_codex_rate_limit_reset_credit, cursor_logout, delete_account,
+    export_accounts_full_encrypted_bytes, export_accounts_slim_text, get_account_reset_credits,
     get_account_usage_stats, get_active_account_info, get_codex_reopen_info,
     get_discord_presence_enabled, get_masked_account_ids, get_usage,
     import_accounts_full_encrypted_bytes, import_accounts_slim_text, kill_codex_processes,
-    kill_tool_processes, list_accounts, open_codex_app, refresh_account_metadata,
-    refresh_all_accounts_usage, rename_account, reopen_closed_codex_desktop,
+    kill_tool_processes, list_accounts, open_codex_app, open_codex_recovery_conversation,
+    prepare_codex_session_recovery, refresh_account_metadata, refresh_all_accounts_usage,
+    rename_account, reopen_closed_codex_desktop, set_auto_warmup_config,
     set_discord_presence_enabled, set_masked_account_ids, start_claude_login, start_login,
     switch_account, warmup_account, warmup_all_accounts,
 };
@@ -194,6 +196,10 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             let args: AccountIdArgs = parse_args(payload)?;
             to_json(get_account_usage_stats(args.account_id).await?)
         }
+        "get_account_reset_credits" => {
+            let args: AccountIdArgs = parse_args(payload)?;
+            to_json(get_account_reset_credits(args.account_id).await?)
+        }
         "refresh_account_metadata" => {
             let args: AccountIdArgs = parse_args(payload)?;
             to_json(refresh_account_metadata(args.account_id).await?)
@@ -206,6 +212,21 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
         "warmup_account" => {
             let args: AccountIdArgs = parse_args(payload)?;
             to_json(warmup_account(args.account_id).await?)
+        }
+        "set_auto_warmup_config" => {
+            #[derive(Debug, Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct AutoWarmupConfigArgs {
+                enabled_all: Option<bool>,
+                account_ids: Option<Vec<String>>,
+                ledger: Option<std::collections::HashMap<String, crate::auto_warmup::LedgerEntry>>,
+            }
+            let args: AutoWarmupConfigArgs = parse_args(payload)?;
+            to_json(set_auto_warmup_config(
+                args.enabled_all,
+                args.account_ids,
+                args.ledger,
+            )?)
         }
         "warmup_all_accounts" => {
             let args: ToolArgs = parse_args(payload)?;
@@ -286,6 +307,17 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             to_json(kill_tool_processes(args.tool).await?)
         }
         "open_codex_app" => to_json(open_codex_app().await?),
+        "prepare_codex_session_recovery" => to_json(prepare_codex_session_recovery().await?),
+        "cancel_codex_session_recovery" => to_json(cancel_codex_session_recovery()?),
+        "open_codex_recovery_conversation" => {
+            #[derive(Debug, Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct RecoveryConversationArgs {
+                session_id: String,
+            }
+            let args: RecoveryConversationArgs = parse_args(payload)?;
+            to_json(open_codex_recovery_conversation(args.session_id).await?)
+        }
         "get_discord_presence_enabled" => to_json(get_discord_presence_enabled().await?),
         "set_discord_presence_enabled" => {
             #[derive(Debug, Deserialize)]

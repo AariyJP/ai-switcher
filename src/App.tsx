@@ -22,6 +22,7 @@ import { useAccounts } from "@/hooks/useAccounts";
 import { useForceCloseCodexProcesses } from "@/hooks/useForceCloseCodexProcesses";
 import { useDesktopReopen } from "@/hooks/useDesktopReopen";
 import { useCodexClosePreference } from "@/hooks/useCodexClosePreference";
+import { SessionRecoveryPanel } from "@/components/SessionRecoveryPanel";
 import { SettingsModal } from "@/components/SettingsModal";
 import { finishForceClose, type DesktopReopenPreference } from "@/lib/desktopReopen";
 import type { CodexClosePreference } from "@/lib/codexClosePreference";
@@ -103,6 +104,13 @@ import {
   type AutoWarmupWindowKind,
 } from "@/lib/autoWarmupPolicy";
 import { pluralize } from "@/lib/pluralize";
+import {
+  readAutoResumeSessions,
+  writeAutoResumeSessions,
+  type RecoveryProgress,
+  type RecoveryReport,
+  type RecoveryState,
+} from "@/lib/sessionRecovery";
 import { cn } from "@/lib/utils";
 import "@/App.css";
 
@@ -124,6 +132,20 @@ type AutoWarmupLedger = Record<
     lastAutoWindowKind?: AutoWarmupWindowKind;
   }
 >;
+// Desktop auto warm-ups run in the native scheduler (src-tauri/src/auto_warmup.rs)
+// because macOS suspends this webview while the window is closed to the menu bar.
+const NATIVE_AUTO_WARMUP_STARTED_EVENT = "auto-warmup-started";
+const NATIVE_AUTO_WARMUP_FINISHED_EVENT = "auto-warmup-finished";
+interface NativeAutoWarmupStartedPayload {
+  accountId: string;
+}
+interface NativeAutoWarmupFinishedPayload {
+  accountId: string;
+  accountName: string;
+  kind: AutoWarmupWindowKind;
+  entry: AutoWarmupLedger[string] | null;
+  error: string | null;
+}
 
 const isMacOs =
   typeof navigator !== "undefined" &&
@@ -290,6 +312,8 @@ function App() {
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [pendingSwitchAccountId, setPendingSwitchAccountId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [autoResumeSessions, setAutoResumeSessions] = useState(() => readAutoResumeSessions());
+  const [recoveryState, setRecoveryState] = useState<RecoveryState | null>(null);
   const [isCompletingForceClose, setIsCompletingForceClose] = useState(false);
   const [isOpeningCodex, setIsOpeningCodex] = useState(false);
   const forceCloseInFlightRef = useRef(false);
@@ -433,6 +457,15 @@ function App() {
     } catch {
       // Ignore storage errors; auto warm-up still works for the current session.
     }
+
+    if (isTauriRuntime()) {
+      // The ledger rides along so history from older builds migrates in the
+      // same write that enables the native scheduler (newer entries win).
+      void invokeBackend("set_auto_warmup_config", {
+        enabledAll: autoWarmupAllEnabled,
+        ledger: autoWarmupLedgerRef.current,
+      }).catch((err) => console.error("Failed to sync native auto warm-up:", err));
+    }
   }, [autoWarmupAllEnabled]);
 
   useEffect(() => {
@@ -443,6 +476,13 @@ function App() {
       );
     } catch {
       // Ignore storage errors; auto warm-up still works for the current session.
+    }
+
+    if (isTauriRuntime()) {
+      void invokeBackend("set_auto_warmup_config", {
+        accountIds: Array.from(autoWarmupAccountIds),
+        ledger: autoWarmupLedgerRef.current,
+      }).catch((err) => console.error("Failed to sync native auto warm-up:", err));
     }
   }, [autoWarmupAccountIds]);
 
@@ -693,13 +733,27 @@ function App() {
     }
   };
 
+  const saveAutoResumeSessions = (enabled: boolean) => {
+    try {
+      writeAutoResumeSessions(enabled);
+      setAutoResumeSessions(enabled);
+    } catch (err) {
+      showWarmupToast(`Could not save auto-resume preference: ${formatWarmupError(err)}`, true);
+    }
+  };
+
   const handleForceCloseConfirm = async () => {
     if (forceCloseInFlightRef.current || desktopReopen.checking) return;
     forceCloseInFlightRef.current = true;
     const accountId = pendingSwitchAccountId;
     const shouldReopen = desktopReopen.available && desktopReopen.reopen;
+    let preparedRecoveryCount = 0;
+    let reopened = false;
     setIsCompletingForceClose(true);
     try {
+      if (accountId && autoResumeSessions && shouldReopen) {
+        preparedRecoveryCount = await invokeBackend<number>("prepare_codex_session_recovery");
+      }
       try {
         desktopReopen.rememberSelection();
       } catch (err) {
@@ -711,7 +765,12 @@ function App() {
         showWarmupToast(`Could not save close preference: ${formatWarmupError(err)}`, true);
       }
       const result = await closeCodexProcesses(shouldReopen, codexClose.forceClose);
-      if (!result?.processInfo?.can_switch) return;
+      if (!result?.processInfo?.can_switch) {
+        if (preparedRecoveryCount > 0) {
+          await invokeBackend("cancel_codex_session_recovery").catch(() => undefined);
+        }
+        return;
+      }
 
       await finishForceClose(
         { canSwitch: true, reopenToken: result.reopenToken },
@@ -723,16 +782,40 @@ function App() {
         async (token) => {
           try {
             await invokeBackend("reopen_closed_codex_desktop", { token });
+            reopened = true;
             showWarmupToast(accountId ? "Account switched. Codex desktop reopened." : "Codex desktop reopened.");
           } catch (err) {
             showWarmupToast(`Codex closed${accountId ? " and account switched" : ""}, but reopening failed: ${formatWarmupError(err)}`, true);
           }
         },
       );
+      if (preparedRecoveryCount > 0 && reopened) {
+        setRecoveryState({ status: "running", progress: { completed: 0, total: preparedRecoveryCount, current_session_id: null } });
+        let acceptingProgress = true;
+        try {
+          const { Channel } = await import("@tauri-apps/api/core");
+          const onProgress = new Channel<RecoveryProgress>((progress) => {
+            if (acceptingProgress) setRecoveryState({ status: "running", progress });
+          });
+          const report = await invokeBackend<RecoveryReport>("resume_codex_session_recovery", { onProgress });
+          acceptingProgress = false;
+          setRecoveryState({ status: "complete", report });
+        } catch (err) {
+          acceptingProgress = false;
+          setRecoveryState({ status: "error", message: `Account switched, but auto-resume failed: ${formatWarmupError(err)}` });
+        }
+      } else if (preparedRecoveryCount > 0) {
+        await invokeBackend("cancel_codex_session_recovery").catch(() => undefined);
+      } else if (accountId && autoResumeSessions && reopened) {
+        setRecoveryState({ status: "complete", report: { resumed: [], skipped: [], failed: [], timed_out: false } });
+      }
       if (shouldReopen && !result.reopenToken) {
         showWarmupToast("No closed desktop app could be identified for reopening. Open Codex manually.", true);
       }
     } catch (err) {
+      if (preparedRecoveryCount > 0) {
+        await invokeBackend("cancel_codex_session_recovery").catch(() => undefined);
+      }
       console.error("Failed to switch account after closing Codex:", err);
       showWarmupToast(`Switch failed after closing Codex: ${formatWarmupError(err)}`, true);
     } finally {
@@ -970,7 +1053,65 @@ function App() {
     ]
   );
 
+  // Mirror the native scheduler's progress (it keeps running while this
+  // webview is suspended, so these events may arrive late, after a wake-up).
   useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unlistenStarted = await listen<NativeAutoWarmupStartedPayload>(
+        NATIVE_AUTO_WARMUP_STARTED_EVENT,
+        ({ payload }) => {
+          setAutoWarmupRunningIds((prev) => new Set(prev).add(payload.accountId));
+        }
+      );
+      const unlistenFinished = await listen<NativeAutoWarmupFinishedPayload>(
+        NATIVE_AUTO_WARMUP_FINISHED_EVENT,
+        ({ payload }) => {
+          setAutoWarmupRunningIds((prev) => {
+            const next = new Set(prev);
+            next.delete(payload.accountId);
+            return next;
+          });
+
+          if (payload.error) {
+            showWarmupToast(
+              `Auto warm-up failed for ${payload.accountName}: ${payload.error}`,
+              true
+            );
+            return;
+          }
+
+          const entry = payload.entry;
+          if (entry) {
+            setAutoWarmupLedger((prev) => ({ ...prev, [payload.accountId]: entry }));
+          }
+          const modeLabel = payload.kind === "session" ? "5h" : "weekly";
+          showWarmupToast(`Auto ${modeLabel} warm-up sent for ${payload.accountName}`);
+          void refreshSingleUsage(payload.accountId).catch(() => {});
+        }
+      );
+
+      if (disposed) {
+        unlistenStarted();
+        unlistenFinished();
+      } else {
+        unlisteners.push(unlistenStarted, unlistenFinished);
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, [refreshSingleUsage, showWarmupToast]);
+
+  useEffect(() => {
+    // The desktop app hands auto warm-up to the native scheduler.
+    if (isTauriRuntime()) return;
     if (!autoWarmupAllEnabled && autoWarmupAccountIds.size === 0) return;
 
     const checkAutoWarmup = () => {
@@ -1511,6 +1652,9 @@ function App() {
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-8">
+        {recoveryState && (
+          <SessionRecoveryPanel state={recoveryState} onDismiss={() => setRecoveryState(null)} />
+        )}
         {loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-4 py-20">
             <Spinner className="text-foreground size-10" />
@@ -1899,6 +2043,8 @@ function App() {
         onReopenPreferenceChange={saveDesktopReopenPreference}
         closePreference={codexClose.preference}
         onClosePreferenceChange={saveCodexClosePreference}
+        autoResumeSessions={autoResumeSessions}
+        onAutoResumeSessionsChange={saveAutoResumeSessions}
         onOpenChange={setIsSettingsOpen}
       />
 
@@ -2002,6 +2148,34 @@ function App() {
               </p>
             )}
           </div>
+          {pendingSwitchAccount && (
+            <div className="bg-muted flex flex-col gap-2 rounded-lg p-3">
+              <label className="flex items-start gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={autoResumeSessions}
+                  onChange={(event) => saveAutoResumeSessions(event.target.checked)}
+                  disabled={
+                    isForceClosingCodex ||
+                    desktopReopen.checking ||
+                    !desktopReopen.available ||
+                    !desktopReopen.reopen
+                  }
+                  className="accent-primary mt-0.5 size-4 shrink-0"
+                />
+                Auto-resume interrupted conversations after switching
+              </label>
+              <p className="text-muted-foreground text-xs">
+                {desktopReopen.checking
+                  ? "Checking whether Codex desktop can reopen..."
+                  : !desktopReopen.available
+                    ? "Requires a supported Codex desktop app to reopen."
+                    : !desktopReopen.reopen
+                      ? "Enable desktop reopening to auto-resume conversations. You can change this in Settings."
+                      : "Continue quota-stopped chats and, on macOS, running chats interrupted by the restart. This preference is saved in Settings."}
+              </p>
+            </div>
+          )}
           {codexClose.forceClose && (
             <p className="text-destructive text-sm">Unsaved Codex work may be lost.</p>
           )}

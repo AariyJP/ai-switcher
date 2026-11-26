@@ -30,6 +30,8 @@ interface SettingsModalProps {
   onReopenPreferenceChange: (value: DesktopReopenPreference) => void;
   closePreference: CodexClosePreference;
   onClosePreferenceChange: (value: CodexClosePreference) => void;
+  autoResumeSessions: boolean;
+  onAutoResumeSessionsChange: (value: boolean) => void;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -39,6 +41,8 @@ export function SettingsModal({
   onReopenPreferenceChange,
   closePreference,
   onClosePreferenceChange,
+  autoResumeSessions,
+  onAutoResumeSessionsChange,
   onOpenChange,
 }: SettingsModalProps) {
   return (
@@ -86,6 +90,21 @@ export function SettingsModal({
             </Select>
             <FieldDescription>
               Applies to detected Codex desktop apps on macOS and Windows. When switching accounts, the app reopens after the switch succeeds.
+            </FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="auto-resume-sessions">
+              <input
+                id="auto-resume-sessions"
+                type="checkbox"
+                checked={autoResumeSessions}
+                onChange={(event) => onAutoResumeSessionsChange(event.target.checked)}
+                className="accent-primary size-4"
+              />
+              Auto-resume interrupted conversations after switching
+            </FieldLabel>
+            <FieldDescription>
+              With desktop reopening enabled, continue recent quota-stopped conversations after switching. On macOS, also continue running chats interrupted by the restart. Finished chats and chats waiting for input are left alone. Switcher checks that each continuation starts.
             </FieldDescription>
           </Field>
         </FieldGroup>
