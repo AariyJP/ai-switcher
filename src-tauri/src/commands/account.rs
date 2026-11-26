@@ -239,6 +239,52 @@ fn live_auth_matches_account(account: &StoredAccount, live: &AuthDotJson) -> boo
     }
 }
 
+async fn import_live_account(account: &StoredAccount) -> Option<StoredAccount> {
+    match &account.auth_data {
+        AuthData::ClaudeCode { .. } => import_current_claude_account(String::new()).ok(),
+        AuthData::ClaudeDesktop { .. } => import_current_claude_desktop_account(String::new())
+            .await
+            .ok(),
+        AuthData::Cursor { .. } => import_current_cursor_account(String::new()).ok(),
+        AuthData::ApiKey { .. } | AuthData::ChatGPT { .. } => None,
+    }
+}
+
+fn live_account_matches(account: &StoredAccount, live: &StoredAccount) -> bool {
+    let account_uuid = |account: &StoredAccount| match &account.auth_data {
+        AuthData::ClaudeCode { oauth_account, .. } => oauth_account
+            .as_ref()
+            .and_then(|value| value.get("accountUuid"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        AuthData::ClaudeDesktop { session, .. } => session.account_uuid.clone(),
+        _ => None,
+    };
+    if let (Some(stored), Some(current)) = (account_uuid(account), account_uuid(live)) {
+        return stored == current;
+    }
+    match (account.email.as_deref(), live.email.as_deref()) {
+        (Some(stored), Some(current)) => stored.eq_ignore_ascii_case(current),
+        _ => false,
+    }
+}
+
+fn adopt_live_auth_data(account: &mut StoredAccount, live: AuthData) {
+    account.auth_data = match (live, &account.auth_data) {
+        (
+            AuthData::ClaudeCode {
+                credentials,
+                oauth_account: None,
+            },
+            AuthData::ClaudeCode { oauth_account, .. },
+        ) => AuthData::ClaudeCode {
+            credentials,
+            oauth_account: oauth_account.clone(),
+        },
+        (live, _) => live,
+    };
+}
+
 pub async fn switch_account_by_id(account_id: &str) -> Result<(), String> {
     let _auth_guard = AUTH_OPERATION_LOCK.lock().await;
     let mut store = load_accounts().map_err(|e| e.to_string())?;
@@ -300,6 +346,23 @@ pub async fn switch_account_by_id(account_id: &str) -> Result<(), String> {
             set_active_account(account_id).map_err(|e| e.to_string())?;
         }
     } else {
+        let auth_mode = store.accounts[target_index].auth_mode;
+        let active_index = store
+            .active_account_id_for_mode(tool, auth_mode)
+            .and_then(|id| store.accounts.iter().position(|account| account.id == id));
+        if let (Some(index), Some(live)) = (
+            active_index,
+            import_live_account(&store.accounts[target_index]).await,
+        ) {
+            if live_account_matches(&store.accounts[index], &live) {
+                adopt_live_auth_data(&mut store.accounts[index], live.auth_data);
+                save_accounts(&store).map_err(|e| e.to_string())?;
+                if index == target_index {
+                    return Ok(());
+                }
+            }
+        }
+
         ensure_tool_not_running(tool)?;
 
         let account = store.accounts[target_index].clone();
@@ -1098,6 +1161,67 @@ pub async fn get_masked_account_ids() -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn set_masked_account_ids(ids: Vec<String>) -> Result<(), String> {
     crate::auth::storage::set_masked_account_ids(ids).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod live_account_sync_tests {
+    use super::{adopt_live_auth_data, live_account_matches};
+    use crate::types::{AuthData, ClaudeCredential, StoredAccount};
+    use serde_json::json;
+
+    fn claude(email: Option<&str>, uuid: Option<&str>, token: &str) -> StoredAccount {
+        StoredAccount::new_claude_code(
+            String::new(),
+            email.map(str::to_string),
+            None,
+            vec![ClaudeCredential {
+                service_name: "Claude Code-credentials".into(),
+                account_name: "user".into(),
+                value: token.into(),
+            }],
+            uuid.map(|uuid| json!({ "accountUuid": uuid })),
+        )
+    }
+
+    #[test]
+    fn account_uuid_decides_claude_identity_before_email() {
+        let stored = claude(Some("a@example.com"), Some("uuid-a"), "old");
+        assert!(live_account_matches(
+            &stored,
+            &claude(Some("A@example.com"), Some("uuid-a"), "new")
+        ));
+        assert!(!live_account_matches(
+            &stored,
+            &claude(Some("a@example.com"), Some("uuid-b"), "new")
+        ));
+        assert!(live_account_matches(
+            &stored,
+            &claude(Some("A@Example.com"), None, "new")
+        ));
+    }
+
+    #[test]
+    fn unknown_identity_never_matches() {
+        let stored = StoredAccount::new_cursor(String::new(), None, "a".into(), "r".into());
+        let live = StoredAccount::new_cursor(String::new(), None, "b".into(), "s".into());
+        assert!(!live_account_matches(&stored, &live));
+    }
+
+    #[test]
+    fn adopting_live_claude_tokens_keeps_stored_oauth_account() {
+        let mut stored = claude(Some("a@example.com"), Some("uuid-a"), "old");
+        let live = claude(Some("a@example.com"), None, "new");
+        adopt_live_auth_data(&mut stored, live.auth_data);
+        let AuthData::ClaudeCode {
+            credentials,
+            oauth_account,
+        } = &stored.auth_data
+        else {
+            panic!("expected Claude Code auth data");
+        };
+        assert_eq!(credentials[0].value, "new");
+        assert_eq!(oauth_account.as_ref().unwrap()["accountUuid"], "uuid-a");
+    }
 }
 
 #[cfg(test)]
